@@ -1,2 +1,2 @@
-### Welcome to the Main Project ###
-# Enjoy your stay #
+# Welcome to the Main Project #
+### Enjoy your stay ###
