@@ -3,20 +3,20 @@ from io import BytesIO
 
 client = Minio(
     "s3.hippius.com",
-    access_key="access_key_example",
-    secret_key="secret_key_example",
+    access_key="",
+    secret_key="",
     secure=True,
     region="decentralized",
 )
 
 # Create a bucket
-client.make_bucket("my-first-bucket")
+# client.make_bucket("my-first-bucket")
 
 # Upload a file
-content = b"Hello from Hippius!"
+content = b"Hello from the Yuma Capstone Team!"
 client.put_object(
     "my-first-bucket",
-    "test_file.txt",
+    "Yuma_Says_Hello.txt",
     BytesIO(content),
     length=len(content),
     content_type="text/plain",
