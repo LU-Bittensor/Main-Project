@@ -41,14 +41,14 @@ if [ -f "${PRIVATE_KEY}" ] || [ -f "${PUBLIC_KEY}" ]; then
 fi
 
 echo ""
-log "Generating RSA private key with size ${KEY_SIZE} bits..."
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:"${KEY_SIZE}" -aes256 -pass fd:3 -out "${PRIVATE_KEY}" 2>/dev/null 3< <(printf "%s" "${PASSPHRASE}")
+log "Generating X25519 private key..."
+openssl genpkey -algorithm X25519 -aes256 -pass fd:3 -out "${PRIVATE_KEY}" 2>/dev/null 3< <(printf "%s" "${PASSPHRASE}")
 log "Private key encrypted with passphrase."
 
 chmod 600 ${PRIVATE_KEY}
 log "Private key saved: ${PRIVATE_KEY} (permissions set to 600)"
 
-openssl rsa -pubout -in "${PRIVATE_KEY}" -passin fd:3 -out "${PUBLIC_KEY}" 2>/dev/null 3< <(printf "%s" "${PASSPHRASE}")
+openssl pkey -pubout -in "${PRIVATE_KEY}" -passin fd:3 -out "${PUBLIC_KEY}" 2>/dev/null 3< <(printf "%s" "${PASSPHRASE}")
 log "Public key saved: ${PUBLIC_KEY}"
 
 echo ""
@@ -56,4 +56,5 @@ log "Key pair setup complete!"
 echo "Private Key: $(pwd)/${PRIVATE_KEY} (encrypted with passphrase)"
 echo "Public Key: $(pwd)/${PUBLIC_KEY}"
 echo ""
-warn "NOTICE: Keep your private key and passphrase secure. Losing them will result in losing access to encrypted data. Never share your private key or passphrase with anyone. Never commit your passphrase or private key to version control or any public repository."
+warn "NOTICE: Keep your private key and passphrase secure. Losing them will result in losing access to encrypted data. "
+warn "Never share your private key or passphrase with anyone. Never commit your passphrase or private key to version control or any public repository."
