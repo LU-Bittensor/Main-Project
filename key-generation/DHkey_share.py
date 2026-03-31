@@ -35,3 +35,16 @@ def generate_keys(keyname: str, passphrase: str, overwrite: bool = False):
     
     return Path(private_match.group(1)), Path(public_match.group(1))
 
+class DHUser:
+    def __init__(self, name: str, private_key_path: Path, passphrase: str):
+        self.name = name
+        self.shared_secret: bytes | None = None
+
+        private_pem = private_key_path.read_bytes()
+        public_path = private_key_path.with_name(private_key_path.name.replace("private", "public"))
+        public_pem = public_path.read_bytes()
+
+        self.private_key = serialization.load_pem_private_key(private_pem, password=passphrase.encode(), backend=default_backend())
+        self.public_key = serialization.load_pem_public_key(public_pem, backend=default_backend())
+
+    
