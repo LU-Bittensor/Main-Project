@@ -1,8 +1,11 @@
 set -euo pipefail
 
 KEY_SIZE=4096
-PRIVATE_KEY="medilink_private_key.pem"
-PUBLIC_KEY="medilink_public_key.pem"
+
+read -p "Enter the name for the key pair (default: medilink): " KEY_NAME
+KEY_NAME=${KEY_NAME:-medilink}
+PRIVATE_KEY="${KEY_NAME}_private_key.pem"
+PUBLIC_KEY="${KEY_NAME}_public_key.pem"
 
 if [ -t 1 ]; then
     GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -18,7 +21,7 @@ warn() {
     echo -e "${YELLOW}[WARNING]${NC} $*"
 }
 
-echo "Save this passphrase securely. It will be required to access the private key in the future."
+log "Save this passphrase securely. It will be required to access the private key in the future."
 read -p "Enter the passphrase for the private key: " -s PASSPHRASE
 echo ""
 read -p "Confirm the passphrase: " -s CONFIRM_PASSPHRASE
@@ -32,7 +35,7 @@ fi
 PASSPHRASE=$(echo -n "${PASSPHRASE}" | tr -d '\n')
 
 if [ -f "${PRIVATE_KEY}" ] || [ -f "${PUBLIC_KEY}" ]; then
-    echo "One or both keys already exist. Do you want to overwrite them? (y/n)"
+    warn "One or both keys already exist. Do you want to overwrite them? (y/n)"
     read -r OVERWRITE
     if [ "${OVERWRITE}" != "y" ]; then
         echo "Exiting without generating keys."
