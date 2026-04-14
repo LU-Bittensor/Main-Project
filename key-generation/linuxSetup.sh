@@ -21,18 +21,20 @@ warn() {
     echo -e "${YELLOW}[WARNING]${NC} $*"
 }
 
-log "Save this passphrase securely. It will be required to access the private key in the future."
-read -p "Enter the passphrase for the private key: " -s PASSPHRASE
-echo ""
-read -p "Confirm the passphrase: " -s CONFIRM_PASSPHRASE
-echo ""
+printf "Enter the passphrase for the private key: " >&2
+IFS= read -r -s PASSPHRASE
+printf "\n" >&2
+printf "Confirm the passphrase: " >&2
+IFS= read -r -s CONFIRM_PASSPHRASE
+printf "\n" >&2
+
+PASSPHRASE=$(printf '%s' "${PASSPHRASE}" | tr -d '\r\n')
+CONFIRM_PASSPHRASE=$(printf '%s' "${CONFIRM_PASSPHRASE}" | tr -d '\r\n')
 
 if [ "${PASSPHRASE}" != "${CONFIRM_PASSPHRASE}" ]; then
     echo "Passphrases do not match. Please try again."
     exit 1
 fi
-
-PASSPHRASE=$(echo -n "${PASSPHRASE}" | tr -d '\n')
 
 if [ -f "${PRIVATE_KEY}" ] || [ -f "${PUBLIC_KEY}" ]; then
     warn "One or both keys already exist. Do you want to overwrite them? (y/n)"
