@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 import secrets
 
 from web3 import Web3
@@ -114,32 +115,41 @@ CONTRACT_ABI = [
     }
 ]
 
-# Run the linuxSetup.sh script to generate keys, and parse the output to get the paths of the generated private and public key files
+# Generate X25519 key pair
+# Produce pem file format
 def generate_keys(user_name: str, passphrase: str, overwrite: bool = False) -> tuple[Path, Path]:
 
     private_key_file = Path(f"{user_name}_private.pem")
     public_key_file = Path(f"{user_name}_public.pem")
     overwrite_answer = "y" if overwrite else "n"
-    stdin_input = f"{passphrase}\n{passphrase}\n{overwrite_answer}\n"
-    print(f"DEBUG stdin being sent: {repr(stdin_input)}")
-
-    result = subprocess.run(["bash", str(SCRIPT_PATH)], input=stdin_input, capture_output=True, text=True, env={"PRIVATE_KEY":str(private_key_file), "PUBLIC_KEY":str(public_key_file), "PATH":"/usr/bin:/bin:/usr/local/bin"})
-
-    if result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr, file=sys.stderr)
-        raise RuntimeError(f"linuxSetup.sh failed with code {result.returncode}")
     
-    print(result.stdout)
+    if (private_key_file.exists() or public_key_file.exists()) and not overwrite:
+        print(f"Key files for {user_name} already exist. Skipping generation. To overwrite, set overwrite=True.")
+        return private_key_file, public_key_file
 
-    # Parse paths from output lines of the script
-    private_match = re.search(r"Private Key:\s+(\S+\.pem)", result.stdout)
-    public_match = re.search(r"Public Key:\s+(\S+\.pem)", result.stdout)
+    # Genereate X25519 private key
+    private_key = X25519PrivateKey.generate()
 
-    if not private_match or not public_match:
-        raise RuntimeError(f"Failed to parse key paths from linuxSetup.sh output.\nOutput was:\n{result.stdout}")
+    # Write encrypted private key to the PEM file
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.BestAvailableEncryption(passphrase.encode())
+    )
+    private_key_file.write_bytes(private_pem)
+    private_key_file.chmod(0o600) # Set file permissions to read/write for owner only
+
+    # Write public key to PEM file
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    public_key_file.write_bytes(public_pem)
+
+    print(f"[INFO] Private key saved: {private_key_file.resolve()} (permissions set to 600)")
+    print(f"[INFO] Public key saved: {public_key_file.resolve()}")
     
-    return Path(private_match.group(1)), Path(public_match.group(1))
+    return private_key_file, public_key_file
 
 # Representation of one party in the DH exchange
 class DHUser:
@@ -158,7 +168,7 @@ class DHUser:
 
         print(f"{self.name} loaded private key from {private_key_path} and public key from {public_path}")
     
-    # Collect user passphrase and generate keys using the linuxSetup.sh script, then initialize the DHUser with the generated keys
+    # Collect user passphrase and generate keys, then initialize the DHUser with the generated keys
     @classmethod
     def from_script(cls, name: str, overwrite: bool = False):
         print(f"Generating keys for {name}...")
