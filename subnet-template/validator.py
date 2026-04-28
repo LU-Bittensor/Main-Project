@@ -3,11 +3,28 @@ import os
 import random
 import time
 import traceback
+from typing import Any
 
 from bittensor import Subtensor, Wallet, Config, Dendrite
 from bittensor.utils.btlogging import logging
 
-from protocol import Dummy
+from protocol import (
+    AccessRequestSynapse,
+    Dummy,
+    ElectronicHealthRecordSynapse,
+    IntegrityVerificationSynapse,
+    MedicalDataRetrievalSynapse,
+    RecordMetadataSynapse,
+)
+
+REQUEST_TYPE_CHOICES = (
+    "dummy",
+    "metadata",
+    "access",
+    "retrieval",
+    "integrity",
+    "ehr",
+)
 
 
 class Validator:
@@ -36,6 +53,58 @@ class Validator:
         # Adds override arguments for network and netuid.
         parser.add_argument(
             "--netuid", type=int, default=1, help="The chain subnet uid."
+        )
+        parser.add_argument(
+            "--request-type",
+            choices=REQUEST_TYPE_CHOICES,
+            default="dummy",
+            help="Synapse request type to send to miners.",
+        )
+        parser.add_argument("--request-id", type=str, default="request-001")
+        parser.add_argument("--requester-id", type=str, default="requester-001")
+        parser.add_argument("--patient-id", type=str, default="patient-001")
+        parser.add_argument("--record-id", type=str, default="record-001")
+        parser.add_argument(
+            "--record-type",
+            type=str,
+            default=None,
+            help="Optional record category filter for metadata discovery.",
+        )
+        parser.add_argument(
+            "--purpose-of-use",
+            type=str,
+            default="treatment",
+            help="Purpose of use for access request testing.",
+        )
+        parser.add_argument(
+            "--date-range-start",
+            type=str,
+            default=None,
+            help="Optional ISO-style start date for access requests.",
+        )
+        parser.add_argument(
+            "--date-range-end",
+            type=str,
+            default=None,
+            help="Optional ISO-style end date for access requests.",
+        )
+        parser.add_argument(
+            "--chunk-range-start",
+            type=int,
+            default=None,
+            help="Optional starting chunk index for retrieval requests.",
+        )
+        parser.add_argument(
+            "--chunk-range-end",
+            type=int,
+            default=None,
+            help="Optional ending chunk index for retrieval requests.",
+        )
+        parser.add_argument(
+            "--provided-digest",
+            type=str,
+            default="digest-001",
+            help="Digest value to validate during integrity checks.",
         )
         # Adds subtensor specific arguments.
         Subtensor.add_args(parser)
@@ -105,35 +174,105 @@ class Validator:
         weights_with_uids = [(int(self.metagraph.uids[i]), score) for i, score in enumerate(self.scores)]
         logging.info(f"Weights (uid, weight): {weights_with_uids}")
 
+    def build_synapse_from_cli(self):
+        if self.config.request_type == "dummy":
+            return Dummy(dummyInput=random.randint(0, 100))
+
+        if self.config.request_type == "metadata":
+            return RecordMetadataSynapse(
+                patientId=self.config.patient_id,
+                requestId=self.config.request_id,
+                recordType=self.config.record_type,
+            )
+
+        if self.config.request_type == "access":
+            return AccessRequestSynapse(
+                requesterId=self.config.requester_id,
+                patientId=self.config.patient_id,
+                recordId=self.config.record_id,
+                purposeOfUse=self.config.purpose_of_use,
+                dateRangeStart=self.config.date_range_start,
+                dateRangeEnd=self.config.date_range_end,
+            )
+
+        if self.config.request_type == "retrieval":
+            return MedicalDataRetrievalSynapse(
+                requesterId=self.config.requester_id,
+                patientId=self.config.patient_id,
+                recordId=self.config.record_id,
+                chunkRangeStart=self.config.chunk_range_start,
+                chunkRangeEnd=self.config.chunk_range_end,
+            )
+
+        if self.config.request_type == "integrity":
+            return IntegrityVerificationSynapse(
+                recordId=self.config.record_id,
+                providedDigest=self.config.provided_digest,
+            )
+
+        if self.config.request_type == "ehr":
+            return ElectronicHealthRecordSynapse(
+                patientId=self.config.patient_id,
+            )
+
+        raise ValueError(f"Unsupported request type: {self.config.request_type}")
+
+    def serialize_response(self, response: Any) -> Any:
+        if response is None:
+            return None
+        if hasattr(response, "model_dump"):
+            return response.model_dump(exclude_none=True)
+        return response
+
+    def log_structured_responses(self, responses):
+        structured_responses = []
+        for i, response in enumerate(responses):
+            structured_responses.append(
+                {
+                    "uid": int(self.metagraph.uids[i]),
+                    "response": self.serialize_response(response),
+                }
+            )
+        logging.info(
+            f"Received {self.config.request_type} responses: {structured_responses}"
+        )
+
     def run(self):
         # The Main Validation Loop.
         logging.info("Starting validator loop.")
         while True:
             try:
                 # time.sleep(int(self.subtensor.tempo(self.config.netuid) * 0.25))
-                # Create a synapse with the current step value.
-                synapse = Dummy(dummy_input=random.randint(0, 100))
+                # Build a synapse from the configured CLI request shape.
+                synapse = self.build_synapse_from_cli()
 
                 # Broadcast a query to all miners on the network.
                 responses = self.dendrite.query(
                     axons=self.metagraph.axons, synapse=synapse, timeout=12
                 )
-                logging.info(f"sending input {synapse.dummy_input}")
+                logging.info(
+                    f"Sending {self.config.request_type} synapse: {synapse.model_dump()}"
+                )
+
+                if self.config.request_type != "dummy":
+                    self.log_structured_responses(responses)
+                    time.sleep(5)
+                    continue
                 
                 # Log the results with UIDs showing input and output
                 responses_with_uids = []
                 for i, response in enumerate(responses):
                     uid = int(self.metagraph.uids[i])
-                    if response is not None and response.dummy_output is not None:
+                    if response is not None and response.dummyOutput is not None:
                         responses_with_uids.append({
                             'uid': uid,
-                            'input': response.dummy_input,
-                            'output': response.dummy_output
+                            'input': response.dummyInput,
+                            'output': response.dummyOutput
                         })
                     else:
                         responses_with_uids.append({
                             'uid': uid,
-                            'input': synapse.dummy_input,
+                            'input': synapse.dummyInput,
                             'output': None
                         })
                 logging.info(f"Received responses: {responses_with_uids}")
@@ -142,7 +281,7 @@ class Validator:
                 original_responses = responses
                 if responses:
                     responses = [
-                        response.dummy_output
+                        response.dummyOutput
                         for response in responses
                         if response is not None
                     ]
@@ -159,8 +298,8 @@ class Validator:
                 # Adjust the scores based on responses from miners and update moving average.
                 # Process by original miner index to maintain UID mapping
                 for i, response in enumerate(original_responses):
-                    if response is not None and response.dummy_output is not None:
-                        current_score = 1 if response.dummy_output == synapse.dummy_input * 2 else 0
+                    if response is not None and response.dummyOutput is not None:
+                        current_score = 1 if response.dummyOutput == synapse.dummyInput * 2 else 0
                     else:
                         current_score = 0
                     self.moving_avg_scores[i] = (

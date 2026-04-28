@@ -4,10 +4,19 @@ import time
 import traceback
 from typing import Tuple
 
-from bittensor import Subtensor, Wallet, Config, Axon
+from bittensor import Subtensor, Wallet, Config, Axon, Synapse
 from bittensor.utils.btlogging import logging
 
-from protocol import Dummy
+from protocol import (
+    AccessRequestSynapse,
+    Allergy,
+    Dummy,
+    ElectronicHealthRecordSynapse,
+    Immunization,
+    IntegrityVerificationSynapse,
+    MedicalDataRetrievalSynapse,
+    RecordMetadataSynapse,
+)
 
 
 class Miner:
@@ -95,7 +104,7 @@ class Miner:
             )
             logging.info(f"Running miner on uid: {self.my_subnet_uid}")
 
-    def blacklist_fn(self, synapse: Dummy) -> Tuple[bool, str]:
+    def blacklist_fn(self, synapse: Synapse) -> Tuple[bool, str]:
         # Ignore requests from unrecognized entities.
         if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
             logging.trace(f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}")
@@ -103,12 +112,118 @@ class Miner:
         logging.trace(f"Not blacklisting recognized hotkey {synapse.dendrite.hotkey}")
         return False, None
 
+    def build_mock_ehr(self, patient_id: str) -> ElectronicHealthRecordSynapse:
+        return ElectronicHealthRecordSynapse(
+            patientId=patient_id,
+            allergies=[
+                Allergy(
+                    substance="Penicillin",
+                    reaction="Rash",
+                    severity="moderate",
+                )
+            ],
+            immunizations=[
+                Immunization(
+                    name="Influenza",
+                    dateAdministered="2026-01-12",
+                    provider="Campus Health Clinic",
+                )
+            ],
+            problems=["Hypertension", "Seasonal allergies"],
+            labResults=[
+                {
+                    "testName": "CBC",
+                    "date": "2026-03-21",
+                    "status": "final",
+                    "summary": "Within normal range",
+                }
+            ],
+        )
+
     def dummy(self, synapse: Dummy) -> Dummy:
         # Simple logic: return the input value multiplied by 2.
-        synapse.dummy_output = synapse.dummy_input * 2
+        synapse.dummyOutput = synapse.dummyInput * 2
         logging.info(
-            f"Received input: {synapse.dummy_input}, sending output: {synapse.dummy_output}"
+            f"Received input: {synapse.dummyInput}, sending output: {synapse.dummyOutput}"
         )
+        return synapse
+
+    def record_metadata(self, synapse: RecordMetadataSynapse) -> RecordMetadataSynapse:
+        records = [
+            {
+                "recordId": "record-001",
+                "recordType": "ehr",
+                "description": "Patient longitudinal health summary",
+                "dateRangeStart": "2025-01-01",
+                "dateRangeEnd": "2026-04-01",
+            },
+            {
+                "recordId": "record-002",
+                "recordType": "lab-results",
+                "description": "Recent laboratory panel results",
+                "dateRangeStart": "2026-03-01",
+                "dateRangeEnd": "2026-03-31",
+            },
+        ]
+        if synapse.recordType is not None:
+            records = [
+                record
+                for record in records
+                if record["recordType"] == synapse.recordType
+            ]
+        synapse.availableRecords = records
+        logging.info(
+            f"Returning {len(records)} records for patient {synapse.patientId}"
+        )
+        return synapse
+
+    def access_request(self, synapse: AccessRequestSynapse) -> AccessRequestSynapse:
+        approved = synapse.purposeOfUse.lower() in {"treatment", "operations"}
+        synapse.accessGranted = approved
+        synapse.contractDecision = "approved" if approved else "denied"
+        synapse.keyReference = (
+            f"mock-key://{synapse.patientId}/{synapse.recordId}"
+            if approved
+            else None
+        )
+        logging.info(
+            f"Access request for record {synapse.recordId} returned {synapse.contractDecision}"
+        )
+        return synapse
+
+    def medical_data_retrieval(
+        self, synapse: MedicalDataRetrievalSynapse
+    ) -> MedicalDataRetrievalSynapse:
+        start = synapse.chunkRangeStart if synapse.chunkRangeStart is not None else 0
+        end = synapse.chunkRangeEnd if synapse.chunkRangeEnd is not None else start
+        synapse.encryptedPayload = (
+            f"mock-encrypted-payload:{synapse.recordId}:chunks-{start}-{end}"
+        )
+        synapse.digestReference = f"digest::{synapse.recordId}"
+        logging.info(
+            f"Returning retrieval payload for record {synapse.recordId} chunks {start}-{end}"
+        )
+        return synapse
+
+    def integrity_verification(
+        self, synapse: IntegrityVerificationSynapse
+    ) -> IntegrityVerificationSynapse:
+        synapse.blockchainDigest = f"digest::{synapse.recordId}"
+        synapse.isValid = synapse.providedDigest == synapse.blockchainDigest
+        logging.info(
+            f"Integrity check for {synapse.recordId} valid={synapse.isValid}"
+        )
+        return synapse
+
+    def electronic_health_record(
+        self, synapse: ElectronicHealthRecordSynapse
+    ) -> ElectronicHealthRecordSynapse:
+        mock_ehr = self.build_mock_ehr(synapse.patientId)
+        synapse.allergies = mock_ehr.allergies
+        synapse.immunizations = mock_ehr.immunizations
+        synapse.problems = mock_ehr.problems
+        synapse.labResults = mock_ehr.labResults
+        logging.info(f"Returning EHR payload for patient {synapse.patientId}")
         return synapse
 
     def setup_axon(self):
@@ -116,9 +231,29 @@ class Miner:
         self.axon = Axon(wallet=self.wallet, config=self.config)
 
         # Attach functions to the axon.
-        logging.info("Attaching forward function to axon.")
+        logging.info("Attaching forward functions to axon.")
         self.axon.attach(
             forward_fn=self.dummy,
+            blacklist_fn=self.blacklist_fn,
+        )
+        self.axon.attach(
+            forward_fn=self.record_metadata,
+            blacklist_fn=self.blacklist_fn,
+        )
+        self.axon.attach(
+            forward_fn=self.access_request,
+            blacklist_fn=self.blacklist_fn,
+        )
+        self.axon.attach(
+            forward_fn=self.medical_data_retrieval,
+            blacklist_fn=self.blacklist_fn,
+        )
+        self.axon.attach(
+            forward_fn=self.integrity_verification,
+            blacklist_fn=self.blacklist_fn,
+        )
+        self.axon.attach(
+            forward_fn=self.electronic_health_record,
             blacklist_fn=self.blacklist_fn,
         )
 
