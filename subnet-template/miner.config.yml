@@ -1,0 +1,11 @@
+netuid: 2
+subtensor:
+  chain_endpoint: ws://127.0.0.1:9945
+  network: local
+wallet:
+  name: test-miner
+  hotkey: default
+axon:
+  port: 8091
+logging:
+  debug: true
