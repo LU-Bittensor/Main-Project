@@ -167,6 +167,46 @@ This script begins the process of sending inputs to the miners and setting weigh
 
 ---
 
+## Hippius CLI Request Flow
+
+The `hippius_cli.py` helper builds Synapse request envelopes for metadata, access, retrieval, integrity, and EHR requests. Use `--dry-run` when you only want to inspect the request payload:
+
+```sh
+python hippius_cli.py metadata --patient-id patient-001 --request-id request-001 --dry-run
+```
+
+For live Hippius submission, provide an endpoint through a config file, environment variable, or CLI flag:
+
+```sh
+python hippius_cli.py metadata --patient-id patient-001 --request-id request-001 --config hippius.config.example.yml
+```
+
+Supported connection settings:
+
+- `--endpoint` or `HIPPIUS_CLI_ENDPOINT`
+- `--timeout` or `HIPPIUS_CLI_TIMEOUT`
+- `--api-key` or `HIPPIUS_CLI_API_KEY`
+- `--config` with a JSON/YAML object such as `hippius.config.example.yml`
+
+The CLI prints a single response envelope for mock and live submissions, and returns a non-zero exit code with a clear error message when the endpoint is missing, unreachable, or returns invalid JSON.
+
+For miner-side alignment, live endpoint assumptions, error cases, and receipt field mapping, see `hippius-cli-integration-plan.md`.
+
+---
+
+## Epic EHR Ingestion Planning
+
+The current EHR intake research is documented in four planning files:
+
+- `epic-fhir-synapse-mapping.md`: maps Epic FHIR resources into the current Synapse model.
+- `ehr-storage-hash-workflow.md`: defines off-chain EHR storage with on-chain hash references.
+- `epic-patient-authorization-flow.md`: describes patient authorization, token handling, and revocation.
+- `epic-sandbox-test-plan.md`: defines sandbox and fixture-based tests for prototype ingestion.
+
+These documents assume Epic is an enterprise intake source. The project should use Epic FHIR data only after patient or organization authorization, then store protected medical data off chain.
+
+---
+
 ## Monitoring and Logging
 
 Use the `--logging.info` flag to print miner and validator log messages directly to the console. This helps you monitor activity in real time. For example

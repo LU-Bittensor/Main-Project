@@ -1,7 +1,112 @@
 import argparse
 import json
+import os
 import sys
+import urllib.error
+import urllib.request
 from typing import Any
+
+DEFAULT_TIMEOUT_SECONDS = 30
+
+
+class HippiusCliError(Exception):
+    """User-facing error raised when the CLI cannot complete a Hippius request."""
+
+
+def deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def coerce_config_value(value: str) -> Any:
+    normalized = value.strip()
+    if normalized.lower() in {"true", "false"}:
+        return normalized.lower() == "true"
+    try:
+        return int(normalized)
+    except ValueError:
+        pass
+    try:
+        return float(normalized)
+    except ValueError:
+        pass
+    return normalized.strip("\"'")
+
+
+def parse_simple_yaml(raw_config: str) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    stack: list[tuple[int, dict[str, Any]]] = [(-1, config)]
+
+    for line_number, raw_line in enumerate(raw_config.splitlines(), start=1):
+        line_without_comment = raw_line.split("#", 1)[0].rstrip()
+        if not line_without_comment.strip():
+            continue
+        if ":" not in line_without_comment:
+            raise ValueError(f"Invalid config line {line_number}: missing ':'.")
+
+        indent = len(line_without_comment) - len(line_without_comment.lstrip(" "))
+        key, raw_value = line_without_comment.strip().split(":", 1)
+        value = raw_value.strip()
+
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        current = stack[-1][1]
+
+        if value == "":
+            child: dict[str, Any] = {}
+            current[key] = child
+            stack.append((indent, child))
+        else:
+            current[key] = coerce_config_value(value)
+
+    return config
+
+
+def load_config_file(config_path: str | None) -> dict[str, Any]:
+    if not config_path:
+        return {}
+    with open(config_path, "r", encoding="utf-8") as file_handle:
+        raw_config = file_handle.read()
+    if config_path.endswith(".json"):
+        loaded = json.loads(raw_config)
+    else:
+        loaded = parse_simple_yaml(raw_config)
+    if not isinstance(loaded, dict):
+        raise ValueError("Configuration file must contain a JSON/YAML object.")
+    return loaded
+
+
+def resolve_hippius_config(args) -> dict[str, Any]:
+    file_config = load_config_file(getattr(args, "config", None))
+    hippius_config = file_config.get("hippius", file_config)
+    if not isinstance(hippius_config, dict):
+        raise ValueError("Hippius configuration must be an object.")
+
+    env_config = filter_none(
+        {
+            "endpoint": os.getenv("HIPPIUS_CLI_ENDPOINT"),
+            "timeout": os.getenv("HIPPIUS_CLI_TIMEOUT"),
+            "api_key": os.getenv("HIPPIUS_CLI_API_KEY"),
+        }
+    )
+    cli_config = filter_none(
+        {
+            "endpoint": getattr(args, "endpoint", None),
+            "timeout": getattr(args, "timeout", None),
+            "api_key": getattr(args, "api_key", None),
+        }
+    )
+
+    resolved = deep_merge(hippius_config, env_config)
+    resolved = deep_merge(resolved, cli_config)
+    resolved["timeout"] = float(resolved.get("timeout", DEFAULT_TIMEOUT_SECONDS))
+    return resolved
+
 
 def filter_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
@@ -179,7 +284,10 @@ def read_response_input(args) -> str:
 
 
 def parse_response_envelope(raw_response: str) -> dict[str, Any]:
-    envelope = json.loads(raw_response)
+    try:
+        envelope = json.loads(raw_response)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Response body is not valid JSON: {error.msg}.") from error
     if not isinstance(envelope, dict):
         raise ValueError("Response must be a JSON object.")
     if "status" not in envelope or "synapseType" not in envelope:
@@ -187,6 +295,88 @@ def parse_response_envelope(raw_response: str) -> dict[str, Any]:
     if "payload" not in envelope:
         raise ValueError("Response envelope must include 'payload'.")
     return envelope
+
+
+def normalize_response_envelope(
+    response_data: dict[str, Any],
+    request_envelope: dict[str, Any],
+) -> dict[str, Any]:
+    if {"status", "synapseType", "payload"}.issubset(response_data):
+        return response_data
+
+    status = response_data.get("status", "success")
+    if status == "error":
+        payload = response_data.get("payload", {})
+    else:
+        payload = response_data.get("payload", response_data)
+
+    return {
+        "status": status,
+        "synapseType": response_data.get("synapseType", request_envelope["synapseType"]),
+        "payload": payload if isinstance(payload, dict) else {"value": payload},
+        "error": response_data.get("error"),
+    }
+
+
+def submit_hippius_request(
+    envelope: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = config.get("endpoint")
+    if not endpoint:
+        raise HippiusCliError(
+            "Missing Hippius endpoint. Set --endpoint, HIPPIUS_CLI_ENDPOINT, or hippius.endpoint in --config."
+        )
+
+    request_body = json.dumps(envelope).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    api_key = config.get("api_key")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    request = urllib.request.Request(
+        endpoint,
+        data=request_body,
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=float(config["timeout"]),
+        ) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        error_body = error.read().decode("utf-8", errors="replace")
+        try:
+            error_envelope = normalize_response_envelope(
+                json.loads(error_body),
+                envelope,
+            )
+        except json.JSONDecodeError:
+            error_envelope = {
+                "status": "error",
+                "synapseType": envelope["synapseType"],
+                "payload": {},
+                "error": f"Hippius HTTP {error.code}: {error_body or error.reason}",
+            }
+        return error_envelope
+    except urllib.error.URLError as error:
+        raise HippiusCliError(f"Could not reach Hippius endpoint: {error.reason}") from error
+    except TimeoutError as error:
+        raise HippiusCliError("Timed out waiting for Hippius response.") from error
+
+    try:
+        response_data = json.loads(response_body)
+    except json.JSONDecodeError as error:
+        raise HippiusCliError(f"Hippius returned non-JSON response: {error.msg}.") from error
+    if not isinstance(response_data, dict):
+        raise HippiusCliError("Hippius response must be a JSON object.")
+    return normalize_response_envelope(response_data, envelope)
 
 
 def add_shared_output_flags(parser: argparse.ArgumentParser) -> None:
@@ -205,6 +395,23 @@ def add_shared_output_flags(parser: argparse.ArgumentParser) -> None:
         "--mock-response",
         action="store_true",
         help="Return a mocked Hippius response envelope for the constructed request.",
+    )
+    parser.add_argument(
+        "--config",
+        help="Path to a JSON/YAML config file containing Hippius CLI connection settings.",
+    )
+    parser.add_argument(
+        "--endpoint",
+        help="Hippius HTTP endpoint for live request submission.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help=f"Hippius request timeout in seconds. Defaults to {DEFAULT_TIMEOUT_SECONDS}.",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="Bearer token for Hippius endpoint authentication.",
     )
 
 
@@ -283,35 +490,40 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.command == "parse-response":
-        envelope = parse_response_envelope(read_response_input(args))
-        if args.output == "json":
-            print(json.dumps(envelope, indent=2))
+    try:
+        if args.command == "parse-response":
+            envelope = parse_response_envelope(read_response_input(args))
+            if args.output == "json":
+                print(json.dumps(envelope, indent=2))
+            else:
+                print(render_response_text(envelope))
+            return 0
+
+        envelope = build_request_envelope(args)
+
+        if args.dry_run:
+            if args.output == "json":
+                print(json.dumps(envelope, indent=2))
+            else:
+                print(render_request_text(envelope))
+            return 0
+
+        if args.mock_response:
+            response_envelope = build_mock_response(envelope)
         else:
-            print(render_response_text(envelope))
-        return 0
+            response_envelope = submit_hippius_request(
+                envelope,
+                resolve_hippius_config(args),
+            )
 
-    envelope = build_request_envelope(args)
-
-    if args.mock_response:
-        response_envelope = build_mock_response(envelope)
         if args.output == "json":
             print(json.dumps(response_envelope, indent=2))
         else:
             print(render_response_text(response_envelope))
         return 0
-
-    if args.output == "json":
-        print(json.dumps(envelope, indent=2))
-    else:
-        print(render_request_text(envelope))
-
-    if not args.dry_run:
-        print(
-            "Request construction complete. Hippius transport submission is not implemented yet.",
-        )
-
-    return 0
+    except (HippiusCliError, ValueError, OSError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

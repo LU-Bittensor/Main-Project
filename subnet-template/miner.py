@@ -10,11 +10,15 @@ from bittensor.utils.btlogging import logging
 from protocol import (
     AccessRequestSynapse,
     Allergy,
+    ClinicalDocument,
     Dummy,
+    Encounter,
     ElectronicHealthRecordSynapse,
     Immunization,
     IntegrityVerificationSynapse,
+    Medication,
     MedicalDataRetrievalSynapse,
+    ObservationResult,
     RecordMetadataSynapse,
 )
 
@@ -138,6 +142,41 @@ class Miner:
                     "summary": "Within normal range",
                 }
             ],
+            medications=[
+                Medication(
+                    name="Lisinopril",
+                    status="active",
+                    authoredOn="2026-02-14",
+                    requester="Campus Health Clinic",
+                )
+            ],
+            encounters=[
+                Encounter(
+                    encounterId="encounter-001",
+                    status="finished",
+                    classCode="ambulatory",
+                    periodStart="2026-03-21T09:00:00Z",
+                    periodEnd="2026-03-21T09:30:00Z",
+                )
+            ],
+            documents=[
+                ClinicalDocument(
+                    documentId="document-001",
+                    documentType="clinical-note",
+                    title="Primary care visit summary",
+                    date="2026-03-21",
+                    contentReference="mock-document://patient-001/document-001",
+                )
+            ],
+            observations=[
+                ObservationResult(
+                    name="Blood pressure",
+                    value="128/82",
+                    unit="mmHg",
+                    effectiveDate="2026-03-21",
+                    status="final",
+                )
+            ],
         )
 
     def dummy(self, synapse: Dummy) -> Dummy:
@@ -223,6 +262,10 @@ class Miner:
         synapse.immunizations = mock_ehr.immunizations
         synapse.problems = mock_ehr.problems
         synapse.labResults = mock_ehr.labResults
+        synapse.medications = mock_ehr.medications
+        synapse.encounters = mock_ehr.encounters
+        synapse.documents = mock_ehr.documents
+        synapse.observations = mock_ehr.observations
         logging.info(f"Returning EHR payload for patient {synapse.patientId}")
         return synapse
 

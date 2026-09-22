@@ -20,6 +20,45 @@ class Allergy(BaseModel):
     severity: str
 
 
+class Medication(BaseModel):
+    "Medication model for EHR payload testing and Epic FHIR ingestion."
+
+    name: str
+    status: str | None = None
+    authoredOn: str | None = None
+    requester: str | None = None
+
+
+class Encounter(BaseModel):
+    "Encounter model for visit context imported from EHR systems."
+
+    encounterId: str
+    status: str | None = None
+    classCode: str | None = None
+    periodStart: str | None = None
+    periodEnd: str | None = None
+
+
+class ClinicalDocument(BaseModel):
+    "Clinical document metadata used for EHR record discovery and retrieval."
+
+    documentId: str
+    documentType: str
+    title: str
+    date: str | None = None
+    contentReference: str | None = None
+
+
+class ObservationResult(BaseModel):
+    "Observation or diagnostic result normalized from EHR systems."
+
+    name: str
+    value: str | None = None
+    unit: str | None = None
+    effectiveDate: str | None = None
+    status: str | None = None
+
+
 class RecordMetadataSynapse(Synapse):
     "Discovers available medical records and returns metadata before a requester asks for access to a specific record."
 
@@ -72,6 +111,10 @@ class ElectronicHealthRecordSynapse(Synapse):
     immunizations: list[Immunization] | None = None
     problems: list[str] | None = None
     labResults: list[dict[str, typing.Any]] | None = None
+    medications: list[Medication] | None = None
+    encounters: list[Encounter] | None = None
+    documents: list[ClinicalDocument] | None = None
+    observations: list[ObservationResult] | None = None
 
 
 class Dummy(Synapse):
