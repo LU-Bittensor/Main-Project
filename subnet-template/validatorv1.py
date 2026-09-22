@@ -1,0 +1,895 @@
+import argparse
+import hashlib
+import json
+import logging
+import math
+import os
+import secrets
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple
+
+import bittensor as bt
+from bittensor.wallet import Wallet
+
+from protocol import MessageSynapse
+
+try:
+    from web3 import Web3
+except ImportError:  # pragma: no cover
+    Web3 = None  # type: ignore
+
+try:
+    from web3.middleware import ExtraDataToPOAMiddleware
+except ImportError:  # pragma: no cover
+    try:
+        from web3.middleware import geth_poa_middleware as ExtraDataToPOAMiddleware  # type: ignore
+    except ImportError:
+        ExtraDataToPOAMiddleware = None  # type: ignore
+
+
+log = logging.getLogger("medilink.validator")
+
+
+def _env_bool(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+RECEIPT_SPEC_VERSION = "1.0"
+BATCH_SPEC_VERSION = "1.0"
+BATCH_WINDOW_NS = 60_000_000_000
+MAX_BATCH_SIZE = 4
+CHALLENGE_TIMEOUT_S = 10.0
+WEIGHTS_RATE_LIMIT_BLOCKS = 100
+EMA_ALPHA = 0.3
+LATENCY_TARGET_MS = 500.0
+LATENCY_CUTOFF_MS = 5000.0
+LATENCY_STEEPNESS = 3.0
+DRIFT_TOLERANCE = 2
+REORG_DEPTH = 6
+EVM_POLL_RETRIES = 3
+# Public Subtensor EVM RPCs often deny wide / OR-shaped eth_getLogs.
+EVM_LOG_CHUNK = 128
+
+# AccessRegistry event signatures (must match key-generation/AccessRegistry.sol).
+# Poll ResourceRegistered + AccessGranted only. AccessGrantSet / AccessRevoked /
+# ChallengeIssued are intentionally omitted (skip-by-default; see Hippius_EHR_Storage.md).
+ACCESS_REGISTRY_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": False, "name": "resourceId", "type": "bytes32"},
+            {"indexed": False, "name": "owner", "type": "address"},
+            {"indexed": False, "name": "dataHash", "type": "bytes32"},
+            {"indexed": False, "name": "dataCid", "type": "string"},
+        ],
+        "name": "ResourceRegistered",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "resourceId", "type": "bytes32"},
+            {"indexed": True, "name": "requester", "type": "address"},
+            {"indexed": False, "name": "dataHash", "type": "bytes32"},
+            {"indexed": False, "name": "grantedAt", "type": "uint256"},
+        ],
+        "name": "AccessGranted",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "resourceId", "type": "bytes32"},
+            {"indexed": True, "name": "requester", "type": "address"},
+            {"indexed": False, "name": "deniedAt", "type": "uint256"},
+        ],
+        "name": "AccessDenied",
+        "type": "event",
+    },
+]
+
+VALIDATOR_SIGN_FIELDS = [
+    "spec_version",
+    "tx_id",
+    "timestamp_ns",
+    "actor_evm_addr",
+    "op_type",
+    "data_cid",
+    "prev_cid",
+    "hippius_status",
+    "validator_hotkey",
+]
+
+BATCH_SIGN_FIELDS = [
+    "spec_version",
+    "batch_index",
+    "window_start_ns",
+    "window_end_ns",
+    "receipt_count",
+    "receipt_cids",
+    "merkle_root",
+    "prev_batch_cid",
+    "validator_hotkey",
+]
+
+
+def canonical_bytes(obj: Dict[str, Any]) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def compute_cid(obj: Dict[str, Any]) -> str:
+    # Local deterministic CID-like id for validator/miner consistency checks.
+    digest = hashlib.sha256(canonical_bytes(obj)).hexdigest()
+    return f"bafy{digest[:52]}"
+
+
+def _sha(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+class MerkleTree:
+    def __init__(self, cids: List[str]):
+        self.leaf_hashes = [_sha(cid.encode("utf-8")) for cid in sorted(cids)]
+        if not self.leaf_hashes:
+            self.layers = [[_sha(b"empty")]]
+        else:
+            self.layers = [self.leaf_hashes[:]]
+            while len(self.layers[-1]) > 1:
+                current = self.layers[-1]
+                if len(current) % 2 == 1:
+                    current = current + [current[-1]]
+                parents = []
+                for i in range(0, len(current), 2):
+                    # Canonical ordering removes direction ambiguity in proof verification.
+                    left, right = sorted([current[i], current[i + 1]])
+                    parents.append(_sha(left + right))
+                self.layers.append(parents)
+
+    @property
+    def root_hex(self) -> str:
+        return self.layers[-1][0].hex()
+
+    def generate_proof(self, target_cid: str) -> List[str]:
+        target_hash = _sha(target_cid.encode("utf-8"))
+        if target_hash not in self.layers[0]:
+            raise ValueError("target leaf missing")
+        idx = self.layers[0].index(target_hash)
+        path: List[str] = []
+        for layer in self.layers[:-1]:
+            layer_for_pair = layer[:] + [layer[-1]] if len(layer) % 2 == 1 else layer[:]
+            sibling_idx = idx ^ 1
+            path.append(layer_for_pair[sibling_idx].hex())
+            idx //= 2
+        return path
+
+    @staticmethod
+    def verify(target_cid: str, proof_path: List[str]) -> str:
+        node = _sha(target_cid.encode("utf-8"))
+        for sibling_hex in proof_path:
+            sibling = bytes.fromhex(sibling_hex)
+            left, right = sorted([node, sibling])
+            node = _sha(left + right)
+        return node.hex()
+
+
+@dataclass
+class CommitmentEvent:
+    actor_evm_addr: str
+    data_cid: str
+    hippius_status: str
+    op_type_hint: Optional[str] = None  # AUDIT | WRITE | UPDATE | None → derive
+    resource_id: Optional[str] = None
+
+
+class _MetagraphView:
+    """Thin adapter over bittensor v11 metagraph reads."""
+
+    def __init__(self, subtensor: Any, netuid: int):
+        self._sub = subtensor
+        self.netuid = netuid
+        self.hotkeys: List[str] = []
+        self.axons: List[Any] = []
+        self._raw = None
+
+    def sync(self) -> None:
+        mg = self._sub.subnets.metagraph(self.netuid)
+        self._raw = mg
+        self.hotkeys = list(getattr(mg, "hotkeys", []) or [n.hotkey for n in mg])
+        axons = []
+        for n in mg:
+            endpoint = getattr(n, "axon", None)
+            port = 0
+            ip = "0.0.0.0"
+            if isinstance(endpoint, str) and ":" in endpoint:
+                ip, _, port_s = endpoint.rpartition(":")
+                try:
+                    port = int(port_s)
+                except ValueError:
+                    port = 0
+            axons.append(SimpleNamespace(ip=ip, port=port, hotkey=n.hotkey))
+        # Local smoke-test override: LOCAL_MINER_AXON=ip:port applied to matching hotkey
+        # or to every non-self axon with no published endpoint.
+        override = os.getenv("LOCAL_MINER_AXON", "").strip()
+        if override and ":" in override:
+            o_ip, _, o_port_s = override.rpartition(":")
+            try:
+                o_port = int(o_port_s)
+            except ValueError:
+                o_port = 0
+            target_hk = os.getenv("LOCAL_MINER_HOTKEY", "").strip()
+            for axon in axons:
+                if o_port <= 0:
+                    break
+                if target_hk and axon.hotkey != target_hk:
+                    continue
+                if target_hk or axon.port <= 0:
+                    axon.ip = o_ip
+                    axon.port = o_port
+        self.axons = axons
+
+
+class _SynapseFanout:
+    """
+    HTTP fanout replacing v10 Dendrite. Posts JSON envelopes to miner axons
+    published via ServeAxon (ip:port on the metagraph).
+    """
+
+    def __init__(self, wallet: Wallet):
+        self.wallet = wallet
+        try:
+            import httpx
+
+            self._httpx = httpx
+        except ImportError:
+            self._httpx = None
+            log.warning("httpx not installed; miner fanout will be a no-op")
+
+    @staticmethod
+    def _path_for_payload(payload: Optional[Dict[str, Any]]) -> str:
+        p = payload or {}
+        if "merkle_root" in p and "receipt_cids" in p:
+            return "/batch"
+        if "target_receipt_cid" in p and "batch_cid" in p:
+            return "/challenge/merkle"
+        if "receipt_cid" in p and "nonce" in p and "op_type" not in p:
+            return "/challenge/pin"
+        if set(p.keys()) <= {"actor_evm_addr"} or (
+            "actor_evm_addr" in p and "op_type" not in p and "receipt_cid" not in p and "merkle_root" not in p
+        ):
+            return "/index"
+        return "/receipt"
+
+    def query(self, axons=None, synapse=None, timeout: float = 10.0):
+        axons = list(axons or [])
+        payload = getattr(synapse, "payload", None) if synapse is not None else None
+        if not axons:
+            return [None]
+        if self._httpx is None:
+            log.debug("dendrite stub (no httpx): fanout to %s axons", len(axons))
+            return [None] * len(axons)
+
+        path = self._path_for_payload(payload if isinstance(payload, dict) else {})
+        body = {"payload": payload or {}}
+        out: List[Optional[MessageSynapse]] = []
+        for axon in axons:
+            ip = getattr(axon, "ip", None) or "127.0.0.1"
+            port = int(getattr(axon, "port", 0) or 0)
+            if port <= 0 or ip in ("0.0.0.0", ""):
+                out.append(None)
+                continue
+            url = f"http://{ip}:{port}{path}"
+            try:
+                resp = self._httpx.post(url, json=body, timeout=timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                result_payload = data.get("payload", data) if isinstance(data, dict) else {}
+                out.append(MessageSynapse(payload=dict(result_payload or {})))
+            except Exception as exc:
+                log.debug("fanout failed %s: %s", url, exc)
+                out.append(None)
+        return out or [None]
+
+
+
+class ValidatorV1:
+    def __init__(self):
+        self.config = self.get_config()
+        self.setup_logging()
+        self.setup_bittensor_objects()
+        self.my_uid = self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
+        self.keypair = self.wallet.hotkey
+        self.actor_tips: Dict[str, Dict[str, Any]] = {}
+        self.batch_tips: Dict[str, Dict[str, Any]] = {"global": {"tip_batch_cid": None, "batch_count": 0}}
+        self.batch_pending: List[str] = []
+        self.window_open_ns = time.time_ns()
+        self.batch_index = 0
+        self.score_ema: Dict[int, float] = {}
+        self.last_weight_block = 0
+        self.merkle_tree_cache: Dict[str, MerkleTree] = {}
+        self.receipt_cache: Dict[str, Dict[str, Any]] = {}
+        self.last_evm_block: int = max(0, int(getattr(self.config, "evm_start_block", 0)) - 1)
+        self._w3 = None
+        self._registry = None
+        self._setup_evm_client()
+
+    def get_config(self):
+        parser = argparse.ArgumentParser(description="MediLink validator v1 (Access Registry aware)")
+        default_config = Path(__file__).resolve().parent / "validator.config.yml"
+        parser.add_argument(
+            "--config",
+            default=os.getenv("VALIDATOR_CONFIG", str(default_config)),
+            help="YAML config path (default: subnet-template/validator.config.yml).",
+        )
+        parser.add_argument("--netuid", type=int, default=None, help="Subnet UID.")
+        parser.add_argument(
+            "--mock-events",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Synthetic events. Use --no-mock-events for live eth_getLogs.",
+        )
+        parser.add_argument("--evm-rpc", default=None, help="Subtensor EVM HTTP RPC URL.")
+        parser.add_argument("--evm-chain-id", type=int, default=None, help="EVM chain id.")
+        parser.add_argument("--access-registry", default=None, help="AccessRegistry address.")
+        parser.add_argument("--evm-start-block", type=int, default=None, help="eth_getLogs cursor.")
+        parser.add_argument(
+            "--skip-deny-receipts",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Skip AccessDenied receipts.",
+        )
+        parser.add_argument(
+            "--require-evm-association",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Discard unmapped H160 actors.",
+        )
+        parser.add_argument("--wallet", "-w", default=None)
+        parser.add_argument("--wallet-hotkey", "-H", default=None)
+        parser.add_argument("--wallet-path", default=None)
+        parser.add_argument("--network", "-n", default=None, help="Bittensor network or ws:// URL.")
+        parser.add_argument("--logging-debug", action="store_true", default=False)
+        ns = parser.parse_args()
+
+        file_cfg = self._load_yaml_config(ns.config)
+        evm = file_cfg.get("evm") or {}
+        wallet_cfg = file_cfg.get("wallet") or {}
+        subtensor_cfg = file_cfg.get("subtensor") or {}
+
+        def pick(*values, default=None):
+            for v in values:
+                if v is None:
+                    continue
+                if isinstance(v, str) and v.strip() == "":
+                    continue
+                return v
+            return default
+
+        ns.netuid = int(pick(ns.netuid, file_cfg.get("netuid"), default=1))
+        ns.wallet = pick(ns.wallet, os.getenv("BT_WALLET"), wallet_cfg.get("name"), default="test-validator")
+        ns.wallet_hotkey = pick(
+            ns.wallet_hotkey, os.getenv("BT_WALLET_HOTKEY"), wallet_cfg.get("hotkey"), default="default"
+        )
+        ns.wallet_path = pick(
+            ns.wallet_path, os.getenv("BT_WALLET_PATH"), wallet_cfg.get("path"), default="~/.bittensor/wallets"
+        )
+        ns.network = pick(
+            ns.network,
+            os.getenv("BT_NETWORK"),
+            subtensor_cfg.get("chain_endpoint"),
+            subtensor_cfg.get("network"),
+            default="local",
+        )
+        ns.evm_rpc = pick(
+            ns.evm_rpc, os.getenv("EVM_RPC_URL"), evm.get("rpc_url"), default="https://test.chain.opentensor.ai"
+        )
+        ns.evm_chain_id = int(pick(ns.evm_chain_id, os.getenv("EVM_CHAIN_ID"), evm.get("chain_id"), default=945))
+        ns.access_registry = pick(
+            ns.access_registry,
+            os.getenv("ACCESS_REGISTRY"),
+            os.getenv("CONTRACT_ADDRESS"),
+            evm.get("access_registry"),
+            default="",
+        )
+        ns.evm_start_block = int(
+            pick(ns.evm_start_block, os.getenv("EVM_START_BLOCK"), evm.get("start_block"), default=0)
+        )
+        ns.mock_events = pick(ns.mock_events, _env_bool("MOCK_EVENTS"), evm.get("mock_events"), default=True)
+        ns.skip_deny_receipts = pick(
+            ns.skip_deny_receipts, _env_bool("SKIP_DENY_RECEIPTS"), evm.get("skip_deny_receipts"), default=True
+        )
+        ns.require_evm_association = pick(
+            ns.require_evm_association,
+            _env_bool("REQUIRE_EVM_ASSOCIATION"),
+            evm.get("require_evm_association"),
+            default=False,
+        )
+        logging_cfg = file_cfg.get("logging") or {}
+        ns.logging_debug = bool(ns.logging_debug or logging_cfg.get("debug", False))
+        ns.subtensor = SimpleNamespace(network=ns.network, chain_endpoint=ns.network)
+        return ns
+
+    @staticmethod
+    def _load_yaml_config(path: str) -> Dict[str, Any]:
+        cfg_path = Path(os.path.expanduser(path))
+        if not cfg_path.exists():
+            log.warning("Config file not found: %s (using CLI/env defaults)", cfg_path)
+            return {}
+        try:
+            import yaml
+        except ImportError:
+            log.warning("PyYAML not installed; ignoring %s", cfg_path)
+            return {}
+        with cfg_path.open() as fh:
+            data = yaml.safe_load(fh) or {}
+        return data if isinstance(data, dict) else {}
+
+    def setup_logging(self):
+        level = logging.DEBUG if getattr(self.config, "logging_debug", False) else logging.INFO
+        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        log.info("Validator v1 starting (bittensor %s).", getattr(bt, "__version__", "?"))
+        log.info(
+            "Config: netuid=%s network=%s mock_events=%s registry=%s evm_rpc=%s",
+            self.config.netuid,
+            self.config.network,
+            self.config.mock_events,
+            self.config.access_registry or "(none)",
+            self.config.evm_rpc,
+        )
+    def setup_bittensor_objects(self):
+        self.wallet = Wallet(
+            name=self.config.wallet,
+            hotkey=self.config.wallet_hotkey,
+            path=os.path.expanduser(self.config.wallet_path),
+        )
+        network = self.config.network
+        self.subtensor = bt.Subtensor(network)
+        self.dendrite = _SynapseFanout(self.wallet)
+        self.metagraph = _MetagraphView(self.subtensor, self.config.netuid)
+        self.metagraph.sync()
+
+    def _setup_evm_client(self) -> None:
+        if self.config.mock_events:
+            log.info("EVM poller: mock-events enabled (no eth_getLogs).")
+            return
+        if not self.config.access_registry:
+            log.warning("EVM poller: --access-registry unset; live poll returns no events.")
+            return
+        if Web3 is None:
+            log.error("web3 is not installed; pip install web3")
+            return
+        self._w3 = Web3(Web3.HTTPProvider(self.config.evm_rpc))
+        if self.config.evm_chain_id in (945, 964) and ExtraDataToPOAMiddleware is not None:
+            self._w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        if not self._w3.is_connected():
+            log.error("Cannot connect to EVM RPC %s", self.config.evm_rpc)
+            self._w3 = None
+            return
+        self._registry = self._w3.eth.contract(
+            address=Web3.to_checksum_address(self.config.access_registry),
+            abi=ACCESS_REGISTRY_ABI,
+        )
+        log.info(
+            "EVM poller ready: registry=%s rpc=%s chain_id=%s cursor=%s",
+            self.config.access_registry,
+            self.config.evm_rpc,
+            self.config.evm_chain_id,
+            self.last_evm_block,
+        )
+
+    def _sign(self, data: bytes) -> str:
+        return self.keypair.sign(data).hex()
+
+    @staticmethod
+    def _msg(payload: Dict[str, Any]) -> MessageSynapse:
+        return MessageSynapse(payload=payload)
+
+    @staticmethod
+    def _payload(synapse: Optional[MessageSynapse]) -> Optional[Dict[str, Any]]:
+        if synapse is None:
+            return None
+        return dict(getattr(synapse, "payload", {}) or {})
+
+    @staticmethod
+    def _cid_from_data_hash(data_hash: bytes | str) -> str:
+        if isinstance(data_hash, str):
+            raw = data_hash[2:] if data_hash.startswith("0x") else data_hash
+            digest = raw.lower()
+        else:
+            digest = data_hash.hex()
+        return f"bafy{digest[:52]}"
+
+    def resolve_evm_actor(self, h160: str) -> Optional[str]:
+        """
+        Resolve H160 → SS58 via SubtensorModule.EVMAssociation when available.
+        Falls back to checksum H160 unless --require-evm-association is set.
+        """
+        address = Web3.to_checksum_address(h160) if Web3 else h160
+        try:
+            # Best-effort substrate storage query; shape varies by SDK/runtime.
+            query = getattr(self.subtensor, "query_module", None) or getattr(self.subtensor, "query", None)
+            if callable(query):
+                result = None
+                try:
+                    result = query("SubtensorModule", "AssociatedEvmAddress", [address])
+                except Exception:
+                    try:
+                        result = query("SubtensorModule", "EVMAssociation", [address])
+                    except Exception:
+                        result = None
+                if result is not None:
+                    value = getattr(result, "value", result)
+                    if value:
+                        return str(value)
+        except Exception as exc:
+            log.debug("EVMAssociation lookup failed for %s: %s", address, exc)
+
+        if self.config.require_evm_association:
+            log.warning("No EVMAssociation for %s; discarding event", address)
+            return None
+        return address
+
+    def poll_evm_commitments(self) -> List[CommitmentEvent]:
+        if self.config.mock_events:
+            sample_actor = self.metagraph.hotkeys[self.my_uid]
+            return [
+                CommitmentEvent(
+                    actor_evm_addr=sample_actor,
+                    data_cid=compute_cid({"seed": str(time.time_ns())}),
+                    hippius_status="SUCCESS",
+                    op_type_hint=None,
+                )
+            ]
+        return self._poll_access_registry_logs()
+
+    def _fetch_registry_event_logs(self, from_block: int, to_block: int):
+        """Fetch and decode registry logs; compatible with web3 v6/v7 get_logs APIs."""
+        assert self._w3 is not None and self._registry is not None
+        address = Web3.to_checksum_address(self.config.access_registry)
+        specs = [
+            ("ResourceRegistered", "ResourceRegistered(bytes32,address,bytes32,string)"),
+            ("AccessGranted", "AccessGranted(bytes32,address,bytes32,uint256)"),
+        ]
+        if not self.config.skip_deny_receipts:
+            specs.append(("AccessDenied", "AccessDenied(bytes32,address,uint256)"))
+
+        registered, granted, denied = [], [], []
+        for name, signature in specs:
+            topic = self._w3.keccak(text=signature)
+            raw_logs = self._w3.eth.get_logs(
+                {
+                    "fromBlock": from_block,
+                    "toBlock": to_block,
+                    "address": address,
+                    "topics": [topic],
+                }
+            )
+            for raw in raw_logs:
+                try:
+                    if name == "ResourceRegistered":
+                        registered.append(self._registry.events.ResourceRegistered().process_log(raw))
+                    elif name == "AccessGranted":
+                        granted.append(self._registry.events.AccessGranted().process_log(raw))
+                    else:
+                        denied.append(self._registry.events.AccessDenied().process_log(raw))
+                except Exception as exc:
+                    log.warning("Failed to decode registry log (%s): %s", name, exc)
+        return registered, granted, denied
+
+    def _poll_access_registry_logs(self) -> List[CommitmentEvent]:
+        if self._w3 is None or self._registry is None:
+            return []
+
+        latest = int(self._w3.eth.block_number)
+        from_block = self.last_evm_block + 1
+        if from_block > latest:
+            return []
+        # Stay behind tip by REORG_DEPTH to reduce reorg churn.
+        tip = max(from_block, latest - REORG_DEPTH) if latest >= REORG_DEPTH else latest
+        # Chunk so public RPCs accept the query shape/size.
+        to_block = min(tip, from_block + EVM_LOG_CHUNK - 1)
+
+        events: List[CommitmentEvent] = []
+        last_error: Optional[Exception] = None
+        registered = granted = denied = []
+        for attempt in range(EVM_POLL_RETRIES):
+            try:
+                registered, granted, denied = self._fetch_registry_event_logs(from_block, to_block)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.5 * (2**attempt))
+        else:
+            log.warning(
+                "eth_getLogs failed after retries (blocks %s-%s): %s",
+                from_block,
+                to_block,
+                last_error,
+            )
+            return []
+
+        max_block = self.last_evm_block
+        for log in registered:
+            max_block = max(max_block, int(log["blockNumber"]))
+            args = log["args"]
+            actor = self.resolve_evm_actor(args["owner"])
+            if not actor:
+                continue
+            data_cid = args.get("dataCid") or self._cid_from_data_hash(args["dataHash"])
+            events.append(
+                CommitmentEvent(
+                    actor_evm_addr=actor,
+                    data_cid=data_cid,
+                    hippius_status="SUCCESS",
+                    op_type_hint=None,
+                    resource_id=Web3.to_hex(args["resourceId"]),
+                )
+            )
+
+        for log in granted:
+            max_block = max(max_block, int(log["blockNumber"]))
+            args = log["args"]
+            actor = self.resolve_evm_actor(args["requester"])
+            if not actor:
+                continue
+            events.append(
+                CommitmentEvent(
+                    actor_evm_addr=actor,
+                    data_cid=self._cid_from_data_hash(args["dataHash"]),
+                    hippius_status="SUCCESS",
+                    op_type_hint="AUDIT",
+                    resource_id=Web3.to_hex(args["resourceId"]),
+                )
+            )
+
+        for log in denied:
+            max_block = max(max_block, int(log["blockNumber"]))
+            args = log["args"]
+            actor = self.resolve_evm_actor(args["requester"])
+            if not actor:
+                continue
+            events.append(
+                CommitmentEvent(
+                    actor_evm_addr=actor,
+                    data_cid=self._cid_from_data_hash(args["resourceId"]),
+                    hippius_status="FAIL",
+                    op_type_hint="AUDIT",
+                    resource_id=Web3.to_hex(args["resourceId"]),
+                )
+            )
+
+        if max_block > self.last_evm_block:
+            self.last_evm_block = max_block
+        elif to_block > self.last_evm_block:
+            self.last_evm_block = to_block
+        return events
+
+    def derive_op_type(self, actor_evm_addr: str, data_cid: str, hint: Optional[str] = None) -> str:
+        if hint in ("AUDIT", "WRITE", "UPDATE", "DELETE_REQ"):
+            return hint
+        actor_state = self.actor_tips.get(actor_evm_addr)
+        if actor_state is None:
+            return "WRITE"
+        if actor_state.get("tip_data_cid") == data_cid:
+            return "AUDIT"
+        return "UPDATE"
+
+    def build_receipt(self, event: CommitmentEvent) -> Tuple[Dict[str, Any], str]:
+        actor_state = self.actor_tips.get(event.actor_evm_addr, {})
+        receipt = {
+            "spec_version": RECEIPT_SPEC_VERSION,
+            "tx_id": str(uuid.uuid4()),
+            "timestamp_ns": time.time_ns(),
+            "actor_evm_addr": event.actor_evm_addr,
+            "op_type": self.derive_op_type(event.actor_evm_addr, event.data_cid, event.op_type_hint),
+            "data_cid": event.data_cid,
+            "prev_cid": actor_state.get("tip_cid"),
+            "hippius_status": event.hippius_status,
+            "validator_hotkey": self.wallet.hotkey.ss58_address,
+        }
+        if event.resource_id:
+            receipt["resource_id"] = event.resource_id
+        signed_payload = {k: receipt[k] for k in VALIDATOR_SIGN_FIELDS}
+        receipt["validator_sig"] = self._sign(canonical_bytes(signed_payload))
+        print(receipt)
+        receipt_cid = compute_cid(receipt)
+        self.receipt_cache[receipt_cid] = receipt
+        self.actor_tips[event.actor_evm_addr] = {
+            "tip_cid": receipt_cid,
+            "tip_data_cid": event.data_cid,
+            "receipt_count": actor_state.get("receipt_count", 0) + 1,
+        }
+        self.batch_pending.append(receipt_cid)
+        return receipt, receipt_cid
+
+    def broadcast_receipt(self, receipt: Dict[str, Any]) -> None:
+        self.dendrite.query(axons=self.metagraph.axons, synapse=self._msg(receipt), timeout=CHALLENGE_TIMEOUT_S)
+
+    def close_batch(self) -> Optional[Tuple[Dict[str, Any], str]]:
+        if not self.batch_pending:
+            return None
+        cids = sorted(self.batch_pending)
+        tree = MerkleTree(cids)
+        envelope = {
+            "spec_version": BATCH_SPEC_VERSION,
+            "batch_index": self.batch_index,
+            "window_start_ns": self.window_open_ns,
+            "window_end_ns": time.time_ns(),
+            "receipt_count": len(cids),
+            "receipt_cids": cids,
+            "merkle_root": tree.root_hex,
+            "prev_batch_cid": self.batch_tips["global"]["tip_batch_cid"],
+            "validator_hotkey": self.wallet.hotkey.ss58_address,
+        }
+        signed_payload = {k: envelope[k] for k in BATCH_SIGN_FIELDS}
+        envelope["validator_sig"] = self._sign(canonical_bytes(signed_payload))
+        batch_cid = compute_cid(envelope)
+        self.merkle_tree_cache[batch_cid] = tree
+        self.batch_tips["global"]["tip_batch_cid"] = batch_cid
+        self.batch_tips["global"]["batch_count"] += 1
+        self.batch_index += 1
+        self.batch_pending = []
+        self.window_open_ns = time.time_ns()
+        self.dendrite.query(axons=self.metagraph.axons, synapse=self._msg(envelope), timeout=CHALLENGE_TIMEOUT_S)
+        return envelope, batch_cid
+
+    def select_challenge_target(self, uid: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        actors = sorted(self.actor_tips.keys())
+        if not actors:
+            return None, None, None
+        actor = actors[uid % len(actors)]
+        return actor, self.actor_tips[actor]["tip_cid"], self.batch_tips["global"]["tip_batch_cid"]
+
+    def _latency_score(self, available: bool, elapsed_ms: float) -> float:
+        if not available:
+            return 0.0
+        if elapsed_ms <= LATENCY_TARGET_MS:
+            return 1.0
+        if elapsed_ms >= LATENCY_CUTOFF_MS:
+            return 0.0
+        x = (elapsed_ms - LATENCY_TARGET_MS) / (LATENCY_CUTOFF_MS - LATENCY_TARGET_MS)
+        return 1.0 / (1.0 + math.exp(LATENCY_STEEPNESS * x * 10 - 5))
+
+    def _integrity_score(
+        self,
+        pin_resp: Optional[MessageSynapse],
+        proof_resp: Optional[MessageSynapse],
+        expected_receipt_cid: str,
+        batch_cid: str,
+    ) -> float:
+        pin_payload = self._payload(pin_resp) or {}
+        proof_payload = self._payload(proof_resp) or {}
+        score = 0.0
+        if pin_payload.get("receipt_json"):
+            try:
+                returned = json.loads(pin_payload["receipt_json"])
+                signed = {k: returned[k] for k in VALIDATOR_SIGN_FIELDS}
+                # Signature validation is intentionally lightweight here; production should use
+                # explicit key verification using validator_hotkey from metagraph.
+                if bool(returned.get("validator_sig")):
+                    score += 0.40
+                if compute_cid(returned) == expected_receipt_cid:
+                    score += 0.30
+            except Exception:
+                pass
+        if proof_payload.get("proof_path") and batch_cid in self.merkle_tree_cache:
+            computed = MerkleTree.verify(expected_receipt_cid, proof_payload["proof_path"])
+            if computed == self.merkle_tree_cache[batch_cid].root_hex:
+                score += 0.30
+        return score
+
+    def _consistency_score(self, index_resp: Optional[MessageSynapse], actor_evm_addr: str) -> float:
+        index_payload = self._payload(index_resp) or {}
+        if not index_payload:
+            return 0.0
+        known_tip = self.actor_tips[actor_evm_addr]["tip_cid"]
+        known_count = self.actor_tips[actor_evm_addr]["receipt_count"]
+        tip_score = 1.0 if index_payload.get("tip_cid") == known_tip else 0.0
+        drift = abs(int(index_payload.get("receipt_count", 0)) - known_count)
+        if drift <= DRIFT_TOLERANCE:
+            count_score = 1.0
+        else:
+            count_score = max(0.0, 1.0 - (drift - DRIFT_TOLERANCE) / max(1, known_count))
+        return (tip_score * 0.6) + (count_score * 0.4)
+
+    def score_miner(
+        self,
+        actor_evm_addr: str,
+        expected_receipt_cid: str,
+        batch_cid: str,
+        pin_resp: Optional[MessageSynapse],
+        proof_resp: Optional[MessageSynapse],
+        index_resp: Optional[MessageSynapse],
+        elapsed_ms: float,
+    ) -> float:
+        pin_payload = self._payload(pin_resp) or {}
+        availability = 1.0 if pin_payload.get("receipt_json") else 0.0
+        latency = self._latency_score(bool(availability), elapsed_ms)
+        integrity = self._integrity_score(pin_resp, proof_resp, expected_receipt_cid, batch_cid)
+        consistency = self._consistency_score(index_resp, actor_evm_addr)
+        composite = (0.40 * availability) + (0.25 * latency) + (0.25 * integrity) + (0.10 * consistency)
+        return max(0.0, min(1.0, composite))
+
+    def run_challenge_round(self) -> Dict[int, float]:
+        self.metagraph.sync()
+        scores: Dict[int, float] = {}
+        for uid, axon in enumerate(self.metagraph.axons):
+            if uid == self.my_uid or getattr(axon, "port", 0) <= 0:
+                continue
+            actor, receipt_cid, batch_cid = self.select_challenge_target(uid)
+            if not actor or not receipt_cid or not batch_cid:
+                continue
+            t0 = time.perf_counter()
+            pin_req = {"receipt_cid": receipt_cid, "nonce": secrets.token_hex(16), "issued_at_ns": time.time_ns()}
+            proof_req = {
+                "batch_cid": batch_cid,
+                "target_receipt_cid": receipt_cid,
+                "nonce": secrets.token_hex(16),
+            }
+            idx_req = {"actor_evm_addr": actor}
+            pin_resp = self.dendrite.query(axons=[axon], synapse=self._msg(pin_req), timeout=CHALLENGE_TIMEOUT_S)[0]
+            proof_resp = self.dendrite.query(
+                axons=[axon], synapse=self._msg(proof_req), timeout=CHALLENGE_TIMEOUT_S
+            )[0]
+            index_resp = self.dendrite.query(axons=[axon], synapse=self._msg(idx_req), timeout=CHALLENGE_TIMEOUT_S)[0]
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            scores[uid] = self.score_miner(actor, receipt_cid, batch_cid, pin_resp, proof_resp, index_resp, elapsed_ms)
+
+        for uid, raw in scores.items():
+            prev = self.score_ema.get(uid, raw)
+            self.score_ema[uid] = (EMA_ALPHA * raw) + ((1.0 - EMA_ALPHA) * prev)
+        return scores
+
+    def maybe_set_weights(self):
+        try:
+            current_block = int(self.subtensor.block)
+        except Exception:
+            current_block = int(getattr(self.subtensor, "get_current_block", lambda: 0)())
+        if current_block - self.last_weight_block < WEIGHTS_RATE_LIMIT_BLOCKS:
+            return
+        n = len(self.metagraph.hotkeys)
+        weights = [0.0] * n
+        for uid, score in self.score_ema.items():
+            if 0 <= uid < n and uid != self.my_uid:
+                weights[uid] = float(score)
+        total = sum(weights)
+        if total <= 0:
+            return
+        weights = [w / total for w in weights]
+        try:
+            result = self.subtensor.execute(
+                bt.SetWeights(netuid=self.config.netuid, uids=list(range(n)), weights=weights),
+                self.wallet,
+            )
+            ok = bool(getattr(result, "success", False))
+        except Exception as exc:
+            log.warning("set_weights failed: %s", exc)
+            ok = False
+        if ok:
+            self.last_weight_block = current_block
+            log.info("Weights submitted at block %s", current_block)
+
+    def run(self):
+        while True:
+            print("Running validator")
+            events = self.poll_evm_commitments()
+            print(events)
+            for event in events:
+                receipt, _ = self.build_receipt(event)
+                self.broadcast_receipt(receipt)
+            if (time.time_ns() - self.window_open_ns) >= BATCH_WINDOW_NS or len(self.batch_pending) >= MAX_BATCH_SIZE:
+                self.close_batch()
+            self.run_challenge_round()
+            self.maybe_set_weights()
+            time.sleep(12)
+
+
+if __name__ == "__main__":
+    ValidatorV1().run()
