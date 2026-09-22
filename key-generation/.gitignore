@@ -1,0 +1,16 @@
+# Local secrets (also covered by root .gitignore)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+deployment.exports.sh
+deployment.json
+
+# Demo / Hardhat local state
+.ehr_local/
+node_modules/
+cache/
+artifacts/
+typechain-types/
+__pycache__/
