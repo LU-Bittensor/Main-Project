@@ -1,4 +1,5 @@
 __pycache__/
 venv
 .venv
+miner_store_v1.db
 .Rhistory

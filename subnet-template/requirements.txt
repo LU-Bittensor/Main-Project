@@ -1,1 +1,9 @@
-bittensor>=10.0.1
+bittensor>=11
+web3>=6.0.0,<7.2.0
+eth-account>=0.13.0,<0.14
+cryptography>=42.0.0
+eth-abi>=5.0.0,<6
+eth-utils>=5.0.0,<6
+boto3>=1.34.0
+py-solc-x>=2.0.0
+PyYAML>=6.0

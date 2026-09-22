@@ -1,4 +1,5 @@
 import typing
+from dataclasses import dataclass, field
 
 from bittensor import Synapse
 from pydantic import BaseModel
@@ -129,3 +130,13 @@ class Dummy(Synapse):
     dummyInput: int
 
     dummyOutput: typing.Optional[int] = None
+
+
+@dataclass
+class MessageSynapse:
+    """Generic envelope: arbitrary fields travel in `payload`.
+
+    Used by validatorv1/minerv1 — Bittensor v11 no longer ships Synapse/Axon/Dendrite.
+    """
+
+    payload: dict[str, typing.Any] = field(default_factory=dict)
