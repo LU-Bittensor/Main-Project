@@ -54,7 +54,7 @@ npm install
 VITE_GRANT_DEMO=true npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-Skip dependency installation if already installed. Open <http://127.0.0.1:5173/>.
+Skip dependency installation if already installed. Open <http://127.0.0.1:5173/>. The landing page redirects to `/signin`; in local demo mode, click **Open local demo** to reach `/records`.
 `--strictPort` prevents Vite switching to 5174, which the API's default CORS settings do not allow. If 5173 is occupied, stop the old frontend or reuse it. Keep the Python terminal running too.
 
 ## Browser walkthrough
@@ -163,13 +163,70 @@ npx eslint src/components/AccessPanel.tsx src/lib/grant-api.ts
 npm run build
 ```
 
+## Patient account registration
+
+The existing **Create Patient Account** form sends full name, email, and password to Supabase Auth. The new signup trigger creates `public.patients` in the same transaction, including when email confirmation is required. No separate browser insert is needed.
+
+The table contains `id` (Auth's generated UUID, also used by records/grants), plaintext `name` and `email`, and `created_at` (database timestamp). Supabase Auth stores the salted bcrypt password hash in protected authentication storage, not in `patients`. Password resets continue through Auth. Patients can read only their own row; direct client inserts/updates are denied. Profile name and confirmed Auth email changes synchronize to the patient row.
+
+### Apply the migration
+
+The supplied pooler URI targets project `cwyxwmzquatqlbufsdob`, while `frontend/supabase/config.toml` names another project. Choose the intended project in Supabase's SQL Editor. For a new database, apply all files in `frontend/supabase/migrations` in filename order. If the two September 7 migrations are already applied, apply only `20260928210000_create_patients.sql`. It also backfills existing patients. Do not rerun previously applied migrations.
+
+Alternatively, with `psql` installed, run this from `Main-Project` after the earlier migrations have been applied:
+
+```sh
+PGSSLMODE=require psql \
+  --host=aws-0-ca-central-1.pooler.supabase.com --port=6543 \
+  --username=postgres.cwyxwmzquatqlbufsdob --dbname=postgres \
+  --password --set=ON_ERROR_STOP=1 \
+  --file=frontend/supabase/migrations/20260928210000_create_patients.sql
+```
+
+Enter the database password at the prompt. The transaction-pooler connection is for database administration/server code; never put it or the database password in frontend code or `VITE_` variables.
+
+Configure the untracked frontend environment for the intended project, then restart Vite:
+
+```dotenv
+VITE_SUPABASE_URL=https://cwyxwmzquatqlbufsdob.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=<publishable key from this project's dashboard>
+VITE_GRANT_DEMO=false
+```
+
+Use the same project for the Python API's `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; start without `--dev` for real accounts. Demo fixtures do not create patient accounts. Configure the local `/signin` URL as an allowed Auth redirect URL for confirmation emails.
+
+### Verify registration
+
+1. Visit `/signin`, select **Patient Sign In**, then **Need an account? Create one**. Enter a name, an email you control, and a password.
+2. Submit and confirm your email if prompted. In SQL Editor, run `select id, name, email, created_at from public.patients order by created_at desc;`. The ID should match **Authentication → Users**.
+3. Sign out and sign back in. Creating a care provider should not create a patient row.
+4. On local/staging Supabase, run `frontend/supabase/tests/patients.sql` to test signup, provider exclusion, updates, row isolation, and deletion. It rolls back its fixtures. Browser testing is still needed to verify password authentication.
+
 ## Existing Supabase accounts
+
+**If Records reports local demo mode / "Invalid local demo account":** the frontend has a real Supabase session but the API was started with `--dev` (including via `load_API_bc.sh`). Adding records cannot fix this. Stop that API with Ctrl+C and start a Supabase-authenticated API instead. To first test records without blockchain setup, run from `Main-Project/key-generation`:
+
+```sh
+export SUPABASE_URL=https://cwyxwmzquatqlbufsdob.supabase.co
+export SUPABASE_PUBLISHABLE_KEY='YOUR_PROJECT_PUBLISHABLE_KEY'
+export GRANT_DATA_DIR="$PWD/.grant-supabase-local"
+# Generate once and retain this key across API restarts.
+(umask 077; mkdir -p "$GRANT_DATA_DIR"; if [ ! -f "$GRANT_DATA_DIR/master.key" ]; then
+  .venv/bin/python -c 'import os, pathlib; p = pathlib.Path(os.environ["GRANT_DATA_DIR"]) / "master.key"; p.write_bytes(os.urandom(32))'
+fi)
+export GRANT_MASTER_KEY="$(.venv/bin/python -c 'import os, pathlib; print((pathlib.Path(os.environ["GRANT_DATA_DIR"]) / "master.key").read_bytes().hex())')"
+.venv/bin/python grant_api.py
+```
+
+Use the publishable key from the same project as the frontend. Keep this data directory separate from demo/chain directories. This command tests real account authentication and record listing, but does not deploy contracts. After restarting, click **Refresh records**. A successful empty database response shows **No records yet**, not an authentication error.
+
+To populate one test record, use Supabase Table Editor → `records`: set `owner_id` to the patient's UUID from `patients`, `name` to a test record name, and `kind` to `Lab report`. Leave generated/default fields unchanged. Refresh the frontend. This inserts metadata only; file upload/download is not connected.
 
 Start the API without `--dev`. Set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `GRANT_MASTER_KEY` (32 random bytes encoded as hex, saved securely and reused across restarts). Keep `RPC_URL`, `OWNER_PRIVATE_KEY`, and `--chain` to use contracts. The entry point does not automatically load `.env` files.
 
 Start the frontend with `VITE_GRANT_DEMO` unset/false, plus its usual `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Optional `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. `FRONTEND_ORIGINS` on the API is a comma-separated origin allowlist; defaults are localhost/127.0.0.1 port 5173.
 
-The recipient first signs in and opens `/provider` or `/` to enroll. The patient then signs in, opens `/access`, and grants access to records already saved in Supabase with their `owner_id`. The Records page displays API records; uploads are not connected yet, so use existing database test rows. Every request verifies the Supabase token; record ownership queries use that same token and RLS. Grants, keys, and contract addresses are in SQLite, not the legacy Supabase `grants` table.
+The recipient first signs in and opens `/provider` or `/records` to enroll. The patient then signs in, opens `/access`, and grants access to records already saved in Supabase with their `owner_id`. The Records page displays API records; uploads are not connected yet, so use existing database test rows. Every request verifies the Supabase token; record ownership queries use that same token and RLS. Grants, keys, and contract addresses are in SQLite, not the legacy Supabase `grants` table.
 
 Without local test funding, the recipient's custodial EVM address must have gas funds. Its public address is shown under **Recipient transaction wallet**. The operator wallet also needs deployment gas. No automatic real-network funding is performed.
 

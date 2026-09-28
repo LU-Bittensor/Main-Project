@@ -248,6 +248,14 @@ def test_mismatched_master_key_and_mode_rejected(setup):
         create_app(dev=True, data_dir=directory, master_key=b"k" * 32, chain=FakeChain())
 
 
+def test_real_account_rejected_by_demo_with_configuration_guidance(setup):
+    client, _ = setup
+    response = client.get("/api/records", headers={"Authorization": "Bearer real-session-token"})
+    assert response.status_code == 401
+    assert "without --dev" in response.get_json()["error"]
+    assert "not a missing-records error" in response.get_json()["error"]
+
+
 def test_supabase_auth_is_verified_and_ownership_filtered(tmp_path, monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
@@ -266,7 +274,9 @@ def test_supabase_auth_is_verified_and_ownership_filtered(tmp_path, monkeypatch)
     client = create_app(data_dir=tmp_path, master_key=b"k" * 32).test_client()
     assert client.get("/api/records", headers={"Authorization": "Bearer invalid"}).status_code == 401
     assert client.post("/api/enroll", headers={"Authorization": "Bearer valid"}).get_json()["id"] == uid
-    assert client.get("/api/records", headers={"Authorization": "Bearer valid"}).get_json() == []
+    response = client.get("/api/records", headers={"Authorization": "Bearer valid"})
+    assert response.status_code == 200
+    assert response.get_json() == []
 
 
 @pytest.fixture

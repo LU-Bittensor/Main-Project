@@ -161,7 +161,12 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         if dev:
             uid = g.token.removeprefix("demo-")
             if g.token != "demo-" + uid or uid not in DEMO_USERS:
-                raise APIError("Invalid local demo account", 401)
+                raise APIError(
+                    "The API is running in local demo mode and cannot accept this account. "
+                    "For Supabase accounts, restart the API without --dev and configure it "
+                    "for the same Supabase project as the frontend. This is not a missing-records error.",
+                    401,
+                )
             g.uid, g.name = uid, DEMO_USERS[uid]
         else:
             # Ask Supabase Auth to verify the token; never trust a decoded JWT payload alone.
