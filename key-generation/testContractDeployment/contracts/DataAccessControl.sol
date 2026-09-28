@@ -2,45 +2,24 @@
 pragma solidity ^0.8.20;
 
 /**
- * DataAccessControl
- * =================
- * Guards access to an off-chain data resource using a DH shared secret.
+ * One contract per recipient-record pair. The owner may permanently deactivate
+ * it with killContract(); no function can reactivate it. Existing challenges
+ * cannot be verified after deactivation. Code and historical data remain.
  *
- * What is stored on-chain:
- *   - keccak256(sharedSecret)  ← a commitment; the secret itself is never stored
- *   - A pending challenge nonce per address
- *
- * What is NEVER on-chain:
- *   - The raw shared secret
- *   - Any intermediate DH values
- *
- * Flow:
- *   1. Owner registers the commitment:  registerCommitment(keccak256(secret))
- *   2. User requests a challenge:        requestChallenge()
- *      → contract emits a random nonce (derived from block data)
- *   3. User computes off-chain:          response = keccak256(secret ++ nonce)
- *   4. User submits response:            verifyAccess(response)
- *      → contract recomputes keccak256(commitment_preimage ++ nonce) …
- *        wait — it can't, it only has the hash.
- *
- *   The trick: we store keccak256(secret) as the commitment.
- *   The user sends keccak256(abi.encodePacked(secret, nonce)).
- *   The contract independently computes keccak256(abi.encodePacked(commitment_preimage, nonce))
- *   — but it doesn't have commitment_preimage!
- *
- *   So the user sends BOTH (secret_hash_with_nonce) AND the contract checks:
- *     keccak256(abi.encodePacked(storedCommitment, nonce)) == response
- *
- *   This means the response is keccak256(keccak256(secret) ++ nonce),
- *   which the contract CAN verify using only the stored commitment.
- *   An attacker who sees the commitment on-chain still can't forge a response
- *   without knowing the original secret (they'd need to invert keccak256).
+ * Prototype limitation: response = keccak256(commitment ++ nonce), with both
+ * inputs public. This does not prove knowledge of the DH secret. API-level
+ * authentication is still required; the original hash flow is retained here.
  */
-contract DataAccessControl {
+
+// Imports OpenZeppelin's secure access control
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract DataAccessControl is Ownable {
+
+    bool public isKilled = false;
 
     // ── Storage ────────────────────────────────────────────────────────────
 
-    address public owner;
     string  public dataIdentifier;   // e.g. IPFS CID or database record ID
 
     // keccak256(sharedSecret) — set once during deployment or by owner
@@ -58,17 +37,26 @@ contract DataAccessControl {
     event ChallengeIssued(address indexed requester, bytes32 nonce, uint256 expiry);
     event AccessGranted(address indexed requester);
     event AccessDenied(address indexed requester);
+    event ContractKilled(address indexed owner);
 
     // ── Constructor ────────────────────────────────────────────────────────
 
-    constructor(string memory _dataIdentifier) {
-        owner = msg.sender;
+    constructor(string memory _dataIdentifier) Ownable(msg.sender) {
         dataIdentifier = _dataIdentifier;
     }
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
+    // Kill Functions/Modifiers
+
+    modifier whenNotKilled() {
+        require(!isKilled, "Contract is deactivated");
         _;
+    }
+
+    /// @notice Irreversibly disable access. Safe for the owner to call repeatedly.
+    function killContract() external onlyOwner {
+        if (isKilled) return;
+        isKilled = true;
+        emit ContractKilled(msg.sender);
     }
 
     // ── Phase 3a: Register the commitment (owner only) ─────────────────────
@@ -80,7 +68,7 @@ contract DataAccessControl {
      * @param _commitment  keccak256(abi.encodePacked(sharedSecret))
      *                     Computed off-chain by Python; never the raw secret.
      */
-    function registerCommitment(bytes32 _commitment) external onlyOwner {
+    function registerCommitment(bytes32 _commitment) external onlyOwner whenNotKilled {
         require(_commitment != bytes32(0), "Empty commitment");
         commitment = _commitment;
     }
@@ -95,7 +83,7 @@ contract DataAccessControl {
      * on-chain randomness without a VRF oracle. For high-value access control,
      * use Chainlink VRF to make the nonce unpredictable.
      */
-    function requestChallenge() external returns (bytes32 nonce) {
+    function requestChallenge() external whenNotKilled returns (bytes32 nonce) {
         require(commitment != bytes32(0), "Commitment not set");
 
         nonce = keccak256(abi.encodePacked(
@@ -113,27 +101,9 @@ contract DataAccessControl {
 
     // ── Phase 4b: Submit response ──────────────────────────────────────────
 
-    /**
-     * Verify the caller knows the shared secret.
-     *
-     * The caller computes off-chain:
-     *   response = keccak256(abi.encodePacked(sharedSecret, nonce))
-     *
-     * The contract verifies:
-     *   keccak256(abi.encodePacked(commitment, nonce)) == response
-     *
-     * Why this works:
-     *   commitment = keccak256(secret)
-     *   response   = keccak256(commitment ++ nonce)   [from user, who knows secret]
-     *   expected   = keccak256(commitment ++ nonce)   [contract recomputes from stored commitment]
-     *
-     *   An attacker sees `commitment` on-chain but cannot compute a valid
-     *   response without inverting keccak256 to recover the secret first.
-     *
-     * @param response  keccak256(abi.encodePacked(sharedSecret, nonce))
-     * @return granted  true if the response is correct and the challenge is fresh
-     */
-    function verifyAccess(bytes32 response) external returns (bool granted) {
+    /// @notice Checks the original prototype response against the stored commitment.
+    /// @dev Both commitment and nonce are public; this is not a secret-possession proof.
+    function verifyAccess(bytes32 response) external whenNotKilled returns (bool granted) {
         bytes32 nonce = pendingChallenge[msg.sender];
         require(nonce != bytes32(0), "No pending challenge");
         require(block.timestamp <= challengeExpiry[msg.sender], "Challenge expired");
@@ -156,7 +126,7 @@ contract DataAccessControl {
     // ── View helpers ───────────────────────────────────────────────────────
 
     function hasPendingChallenge(address user) external view returns (bool) {
-        return pendingChallenge[user] != bytes32(0)
+        return !isKilled && pendingChallenge[user] != bytes32(0)
             && block.timestamp <= challengeExpiry[user];
     }
 }

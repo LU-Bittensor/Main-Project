@@ -1,0 +1,10 @@
+# Local custodial key stores and generated key material
+.grant-*/
+*.pem
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+testContractDeployment/node_modules/
+testContractDeployment/artifacts/
+testContractDeployment/cache/

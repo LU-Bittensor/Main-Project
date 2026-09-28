@@ -29,9 +29,6 @@ from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_abi import encode as abi_encode
 
-import boto3
-from botocore.config import Config as BotocoreConfig
-from botocore.exceptions import ClientError
 
 # Config
 SCRIPT_PATH = Path(__file__).parent / "linuxSetup.sh"
@@ -115,6 +112,39 @@ CONTRACT_ABI = [
     }
 ]
 
+# Noninteractive helpers for the frontend API. The original CLI below remains usable.
+def generate_key_pair() -> tuple[bytes, bytes]:
+    private = X25519PrivateKey.generate()
+    return (
+        private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                              serialization.NoEncryption()),
+        private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw),
+    )
+
+
+def derive_shared_secret(private_key: bytes, peer_public_key: bytes, pair_id: str) -> bytes:
+    raw = X25519PrivateKey.from_private_bytes(private_key).exchange(
+        x25519.X25519PublicKey.from_public_bytes(peer_public_key))
+    # Each recipient-record grant has an independent credential, including re-grants.
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+                info=b"medi-link dh key exchange/pair/" + pair_id.encode()).derive(raw)
+
+
+def encrypt_secret(key: bytes, plaintext: bytes, context: str) -> bytes:
+    nonce = os.urandom(12)
+    return nonce + AESGCM(key).encrypt(nonce, plaintext, context.encode())
+
+
+def decrypt_secret(key: bytes, envelope: bytes, context: str) -> bytes:
+    return AESGCM(key).decrypt(envelope[:12], envelope[12:], context.encode())
+
+
+def create_access_grant(owner_private: bytes, recipient_public: bytes,
+                        pair_id: str, master_key: bytes) -> bytes:
+    shared = derive_shared_secret(owner_private, recipient_public, pair_id)
+    return encrypt_secret(master_key, shared, "grant:" + pair_id)
+
+
 # Generate X25519 key pair
 # Produce pem file format
 def generate_keys(user_name: str, passphrase: str, overwrite: bool = False) -> tuple[Path, Path]:
@@ -193,13 +223,15 @@ class DHUser:
         raw_shared_secret = self.private_key.exchange(peer_pub)
         derived_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"medi-link dh key exchange", backend=default_backend()).derive(raw_shared_secret)
         self.shared_secret = derived_key
-        print(f"{self.name} derived shared secret: {derived_key.hex()}")
+        print(f"{self.name} derived a shared secret (not logged).")
         print(f"Store this shared secret securely! It is not transmitted and is required to compute the on-chain commitment and respond to authentication challenges.")
         print(f"Note: The shared secret is derived from the DH exchange and processed through HKDF, so it cannot be reverse engineered to obtain the original private keys. However, if someone obtains the shared secret, they could impersonate you in the authentication flow, so keep it secure.")
         return derived_key
 
 
 def get_Hippius_client():
+    import boto3
+    from botocore.config import Config as BotocoreConfig
     return boto3.client(
         "s3",
         endpoint_url="https://s3.hippius.com",
@@ -210,6 +242,7 @@ def get_Hippius_client():
     )
 
 def generate_presigned_url(bucket: str, key: str, expiry: int = 300) -> str:
+    from botocore.exceptions import ClientError
     try:
         return get_Hippius_client().generate_presigned_url(
             "get_object",
