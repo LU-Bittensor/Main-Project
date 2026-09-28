@@ -38,9 +38,11 @@ export RPC_URL=http://127.0.0.1:8545
 # Public Hardhat account #0 key: local testing ONLY, never use with real assets.
 export OWNER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 export FUND_LOCAL_WALLETS=1
-export GRANT_DATA_DIR="$PWD/.grant-pairs-chain-v2"
-.venv/bin/python grant_api.py --dev --chain
+export GRANT_DATA_DIR="$PWD/.grant-pairs-local"
+.venv/bin/python grant_api.py --dev --chain --auto-data-dir
 ```
+
+Alternatively, run `bash load_API_bc.sh` from this directory. The launcher automatically selects a child directory under `GRANT_DATA_DIR` (default `.grant-pairs-local`) for the current Hardhat instance and contract build, and prints the path. Restarting only the API reuses the same data. Restarting/resetting Hardhat or changing the contract build selects fresh test data; create the grants again. Old directories are preserved. This avoids the configuration-mismatch error without bypassing the database safety check. The `--auto-data-dir` option requires `--dev --chain` and Hardhat chain ID 31337.
 
 The operator pays for deployments and commitment registration. Each enrolled user has a separate encrypted custodial EVM private key; the recipient's key signs their challenge and verification transactions. `FUND_LOCAL_WALLETS=1`, together with `--dev`, uses Hardhat's test-only balance RPC to fund those wallets. Automatic funding is refused outside chain ID 31337. This does not spend or transfer real funds.
 
@@ -57,15 +59,15 @@ Skip dependency installation if already installed. Open <http://127.0.0.1:5173/>
 
 ## Browser walkthrough
 
-1. In **Access ledger**, select **Test as → Demo patient**. Confirm the panel says **Blockchain connected · one contract per recipient and record**.
+1. In the header, select **Test as → Demo patient**. The **Records** page shows **Demo lipid panel** (`demo-lab`) and **Demo chest X-ray** (`demo-imaging`) from the API. Open **Access ledger** in the navigation (`/access`) and confirm it says **Blockchain connected · one contract per recipient and record**.
 2. Select **Demo clinician**, choose **All records**, and click **Grant**.
 3. Expect two grant cards: **Demo lipid panel** and **Demo chest X-ray**, each active with a **different contract address**. Expand each transaction detail to inspect its deployment and commitment hashes.
-4. Select **Test as → Demo clinician**. Click **Check access** on the lab card. Expect **AccessGranted confirmed on-chain** and a verification transaction hash.
+4. Select **Test as → Demo clinician**. Open **Records** to see the two shared records, then return to **Access ledger**. The selected account persists across navigation and refreshes in this browser tab. Click **Check access** on the lab card. Expect **AccessGranted confirmed on-chain** and a verification transaction hash.
 5. Click it again. Expect a **different verification transaction hash**: every check submits a new challenge and response.
 6. Check the imaging card. Its transactions target the other contract.
 7. Switch back to the patient and grant just **Lab report** again. It reuses the existing active lab pair rather than deploying another contract.
 8. Share **Lab report** with **Unrelated user**. This creates a third contract, distinct from the clinician's lab contract.
-9. Revoke the clinician's lab grant. Expect **Status: revoked**, **Contract permanently disabled**, and a **Revocation transaction** hash. The lab contract now rejects challenges and verification directly; the clinician's next API lab check is also denied. Their imaging check still succeeds.
+9. Revoke the clinician's lab grant. Expect **Status: revoked**, **Contract permanently disabled**, and a **Revocation transaction** hash. The lab contract now rejects challenges and verification directly; the clinician's next API lab check is also denied. Their imaging check still succeeds. Switch to the clinician and open **Records**: only the imaging record remains (use **Refresh records** if the page was already open).
 10. Restart the API with the same data directory and key configuration: the grant addresses and wallets persist.
 
 **Revocation blocks the API and permanently disables the pair contract.** The owner clicks Revoke; the API first persists `revoking` (access denied), then the operator sends `killContract()`. Only a confirmed `isKilled == true` marks a deployed contract `revoked`. The UI displays the kill transaction hash. Deactivation prevents new challenges, commitment updates, and verification of challenges issued before the kill. It does not erase the contract, its history, or previously downloaded files.
@@ -76,7 +78,7 @@ A timeout or RPC failure leaves the grant **revoking**, with API access blocked.
 
 The API operator is the contract owner. Keep that ownership while using API-managed revocation: transferring or renouncing it prevents the configured operator from killing the contract. The permanent flag remains set across ownership changes; there is no reactivation function. Re-granting creates a new contract.
 
-The surrounding six-record viewer and upload button are still mock UI. The access ledger uses two backend fixtures (`demo-lab`, `demo-imaging`) in local mode. It verifies the grant flow but does not download or encrypt medical files.
+The Records page and access ledger use the same two backend fixtures (`demo-lab`, `demo-imaging`) in local mode. The old mock records, provider patient list, and pretend upload form have been removed. Recipients see only records with active grants. This displays record metadata and verifies access; it does not download or encrypt medical files.
 
 ## Off-chain demo
 
@@ -167,7 +169,7 @@ Start the API without `--dev`. Set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, a
 
 Start the frontend with `VITE_GRANT_DEMO` unset/false, plus its usual `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Optional `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. `FRONTEND_ORIGINS` on the API is a comma-separated origin allowlist; defaults are localhost/127.0.0.1 port 5173.
 
-The recipient first signs in and opens `/provider` or `/` to enroll. The patient then signs in, opens `/`, and grants access to records already saved in Supabase with their `owner_id`. The mock upload button does not insert those records; use existing database test rows. Every request verifies the Supabase token; record ownership queries use that same token and RLS. Grants, keys, and contract addresses are in SQLite, not the legacy Supabase `grants` table.
+The recipient first signs in and opens `/provider` or `/` to enroll. The patient then signs in, opens `/access`, and grants access to records already saved in Supabase with their `owner_id`. The Records page displays API records; uploads are not connected yet, so use existing database test rows. Every request verifies the Supabase token; record ownership queries use that same token and RLS. Grants, keys, and contract addresses are in SQLite, not the legacy Supabase `grants` table.
 
 Without local test funding, the recipient's custodial EVM address must have gas funds. Its public address is shown under **Recipient transaction wallet**. The operator wallet also needs deployment gas. No automatic real-network funding is performed.
 

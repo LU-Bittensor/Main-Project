@@ -98,7 +98,11 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                                   "chain": None if chain is None else chain.identity})
         previous = db().execute("SELECT value FROM settings WHERE name='environment'").fetchone()
         if previous and previous[0] != environment:
-            raise RuntimeError("Use a separate GRANT_DATA_DIR for this auth/chain configuration")
+            raise RuntimeError(
+                f"GRANT_DATA_DIR {directory.resolve()} belongs to a different auth/chain configuration. "
+                "For local Hardhat testing, run ./load_API_bc.sh, or use --dev --chain --auto-data-dir. "
+                "Existing data has not been replaced."
+            )
         check = hmac.digest(master_key, b"medilink-master-key-check", "sha256").hex()
         previous_key = db().execute("SELECT value FROM settings WHERE name='key_check'").fetchone()
         if previous_key and not hmac.compare_digest(previous_key[0], check):
@@ -421,18 +425,39 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     return app
 
 
+def local_chain_data_dir(chain):
+    """Keep test databases separate across Hardhat resets and contract builds."""
+    if chain.chain_id != 31337:
+        raise RuntimeError("Automatic data directories are only supported for local Hardhat testing")
+    metadata = chain.w3.provider.make_request("hardhat_metadata", [])
+    instance = metadata.get("result", {}).get("instanceId")
+    if not isinstance(instance, str) or not instance:
+        raise RuntimeError("Cannot identify the Hardhat instance; start the local Hardhat node first")
+    identity = json.dumps(["dh-pair-v1", chain.identity, instance], sort_keys=True)
+    fingerprint = hashlib.sha256(identity.encode()).hexdigest()
+    base = Path(os.getenv("GRANT_DATA_DIR", Path(__file__).parent / ".grant-pairs-local"))
+    return base / fingerprint
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dev", action="store_true", help="Loopback-only fixture identities; never deploy")
     parser.add_argument("--chain", action="store_true", help="Deploy one contract per recipient-record pair and verify access on-chain")
     parser.add_argument("--port", type=int, default=5001)
+    parser.add_argument("--auto-data-dir", action="store_true",
+                        help="Use a separate test directory per Hardhat instance and contract build")
     args = parser.parse_args()
+    if args.auto_data_dir and not (args.dev and args.chain):
+        parser.error("--auto-data-dir requires --dev --chain")
     chain = None
     if args.chain:
         from chain_grants import ChainGrants
         chain = ChainGrants(os.environ["RPC_URL"], os.environ["OWNER_PRIVATE_KEY"],
                             fund_local_wallets=args.dev and os.getenv("FUND_LOCAL_WALLETS") == "1")
-    app = create_app(dev=args.dev, chain=chain)
+    directory = local_chain_data_dir(chain) if args.auto_data_dir else None
+    if directory is not None:
+        print(f"Local test data: {directory.resolve()}", flush=True)
+    app = create_app(dev=args.dev, chain=chain, data_dir=directory)
     app.run(host="127.0.0.1", port=args.port, debug=False)
 
 

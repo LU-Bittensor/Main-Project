@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -7,6 +8,28 @@ from cryptography.exceptions import InvalidTag
 import grant_api
 from grant_api import create_app
 from DHkey_share import decrypt_secret, derive_shared_secret, encrypt_secret, generate_key_pair
+
+
+def test_local_data_directory_tracks_hardhat_instance_and_build(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRANT_DATA_DIR", str(tmp_path))
+    metadata = {"result": {"instanceId": "first-instance"}}
+    chain = SimpleNamespace(chain_id=31337, identity=[31337, "genesis", "owner", "build"],
+                            w3=SimpleNamespace(provider=SimpleNamespace(
+                                make_request=lambda method, params: metadata)))
+    first = grant_api.local_chain_data_dir(chain)
+    assert first.parent == tmp_path
+    assert first == grant_api.local_chain_data_dir(chain)
+    metadata["result"]["instanceId"] = "restarted-instance"
+    assert first != grant_api.local_chain_data_dir(chain)
+    metadata["result"]["instanceId"] = "first-instance"
+    chain.identity[-1] = "new-build"
+    assert first != grant_api.local_chain_data_dir(chain)
+    metadata.clear()
+    with pytest.raises(RuntimeError, match="Cannot identify"):
+        grant_api.local_chain_data_dir(chain)
+    chain.chain_id = 1
+    with pytest.raises(RuntimeError, match="local Hardhat"):
+        grant_api.local_chain_data_dir(chain)
 
 
 def headers(user="patient"):
@@ -221,7 +244,7 @@ def test_mismatched_master_key_and_mode_rejected(setup):
     _, directory = setup
     with pytest.raises(RuntimeError, match="does not match"):
         create_app(dev=True, data_dir=directory, master_key=b"x" * 32)
-    with pytest.raises(RuntimeError, match="separate GRANT_DATA_DIR"):
+    with pytest.raises(RuntimeError, match="different auth/chain configuration"):
         create_app(dev=True, data_dir=directory, master_key=b"k" * 32, chain=FakeChain())
 
 
