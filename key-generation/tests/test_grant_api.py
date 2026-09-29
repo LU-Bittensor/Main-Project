@@ -97,7 +97,7 @@ def test_pair_granularity_overlap_and_encrypted_storage(setup):
     second = make_grant(client, recipient="outsider")
     assert first["id"] != second["id"]
     assert "secret" not in first and "private_key" not in json.dumps(first)
-    with sqlite3.connect(directory / "pair-grants.sqlite3") as db:
+    with sqlite3.connect(directory / "registry-grants.sqlite3") as db:
         private, public, wallet = db.execute("SELECT private_key, public_key, wallet_key FROM users WHERE id='patient'").fetchone()
         envelope = db.execute("SELECT secret FROM grants WHERE id=?", (first["id"],)).fetchone()[0]
         assert len(private) > 32 and len(envelope) > 32 and len(public) == 32 and len(wallet) > 32
@@ -129,68 +129,86 @@ class FakeChain:
         self.timeout_register = False
         self.match = True
         self.allow = True
-        self.killed = set()
-        self.kill_count = 0
-        self.kill_failure = None
+        self.revoked = set()
+        self.resources = {}
+        self.granted = {}
+        self.revoke_count = 0
+        self.revoke_failure = None
 
-    def deploy(self, identifier, save_hash):
+    registry_address = None
+
+    def validate_registry(self, address):
+        assert address in self.contracts
+
+    def deploy(self, save_hash):
         self.deploy_count += 1
         tx = "deploy-" + str(self.deploy_count)
         address = "address-" + str(self.deploy_count)
-        self.contracts[address] = identifier
+        self.contracts[address] = True
         save_hash(tx)
         self.receipts[tx] = {"status": 1, "contractAddress": address}
         if self.timeout_deploy:
             raise TimeoutError()
         return self.receipts[tx]
 
-    def register(self, address, secret, save_hash):
+    def resource_matches(self, address, resource, data_hash, cid):
+        return resource in self.resources
+
+    def register_resource(self, address, resource, data_hash, cid, save_hash):
+        tx = "resource-" + resource.hex()
+        save_hash(tx)
+        self.resources[resource] = (data_hash, cid)
+        self.receipts[tx] = {"status": 1}
+
+    def register(self, address, resource, wallet, secret, save_hash):
         self.register_count += 1
         tx = "register-" + str(self.register_count)
         save_hash(tx)
+        self.granted[(resource, wallet)] = secret
+        self.revoked.discard((resource, wallet))
         self.receipts[tx] = {"status": 1}
         if self.timeout_register:
             raise TimeoutError()
         return self.receipts[tx]
 
-    def is_killed(self, address):
-        if self.kill_failure == "offline":
+    def has_grant(self, address, resource, wallet):
+        if self.revoke_failure == "offline":
             raise ConnectionError()
-        return address in self.killed
+        return (resource, wallet) in self.granted and (resource, wallet) not in self.revoked
 
-    def kill(self, address, save_hash):
-        if self.kill_failure == "before_send":
+    def revoke(self, address, resource, wallet, save_hash):
+        if self.revoke_failure == "before_send":
             raise ConnectionError()
-        self.kill_count += 1
-        tx = "kill-" + str(self.kill_count)
+        self.revoke_count += 1
+        tx = "revoke-" + str(self.revoke_count)
         save_hash(tx)
-        if self.kill_failure == "timeout":
+        if self.revoke_failure == "timeout":
             raise TimeoutError()
         self.receipts[tx] = {"status": 1}
-        self.killed.add(address)
+        self.revoked.add((resource, wallet))
         return self.receipts[tx]
 
     def receipt(self, tx):
         return self.receipts.get(tx)
 
-    def matches(self, address, identifier, secret):
-        return self.match and self.contracts[address] == identifier
+    def matches(self, address, resource, wallet, secret):
+        return self.match and self.granted.get((resource, wallet)) == secret
 
     def request_access(self, *args):
         self.access_count += 1
         return {"allowed": self.allow, "challenge_tx": "challenge", "verify_tx": "verify"}
 
 
-def test_chain_pairs_and_access_every_time(tmp_path):
+def test_shared_registry_and_access_every_time(tmp_path):
     chain = FakeChain()
     client = create_app(dev=True, data_dir=tmp_path, master_key=b"k" * 32, chain=chain).test_client()
     grants = make_grants(client, records=["demo-lab", "demo-imaging"]).get_json()["grants"]
-    assert len({g["contract_address"] for g in grants}) == 2
+    assert len({g["contract_address"] for g in grants}) == 1
     assert all(g["status"] == "active" for g in grants)
-    assert chain.deploy_count == chain.register_count == 2
+    assert chain.deploy_count == 1 and chain.register_count == 2
     lab = next(g for g in grants if g["record_ids"] == ["demo-lab"])
     assert make_grant(client)["id"] == lab["id"]
-    assert chain.deploy_count == 2
+    assert chain.deploy_count == 1
     for _ in range(2):
         response = client.post(f"/api/grants/{lab['id']}/access", headers=headers("clinician"))
         assert response.status_code == 200 and response.get_json()["chain_verified"]
@@ -207,7 +225,7 @@ def test_deploy_timeout_resume_after_restart_without_duplicate(tmp_path):
     chain.timeout_deploy = True
     client = create_app(dev=True, data_dir=tmp_path, master_key=b"k" * 32, chain=chain).test_client()
     grant = make_grant(client)
-    assert grant["status"] == "pending" and grant["deploy_tx"] and not grant["register_tx"]
+    assert grant["status"] == "pending" and not grant["register_tx"]
     refreshed = client.get("/api/grants", headers=headers()).get_json()[0]
     assert refreshed["status"] == "pending"  # Deployment alone never grants access.
     assert chain.register_count == 0  # GET does not submit a transaction.
@@ -286,18 +304,18 @@ def chain_setup(tmp_path):
     return client, chain, tmp_path
 
 
-def test_kill_confirms_idempotently_and_regrant_uses_new_contract(chain_setup):
+def test_registry_revoke_confirms_idempotently_and_regrant_reuses_registry(chain_setup):
     client, chain, _ = chain_setup
     grant = make_grant(client)
     response = client.delete(f"/api/grants/{grant['id']}", headers=headers())
     result = response.get_json()
-    assert response.status_code == 200 and result["contract_killed"]
-    assert result["kill_tx"] and result["status"] == "revoked"
-    assert grant["contract_address"] in chain.killed
+    assert response.status_code == 200 and result["registry_revoked"]
+    assert result["revoke_tx"] and result["status"] == "revoked"
+    assert (bytes.fromhex(grant["resource_id"][2:]), grant["recipient_wallet"]) in chain.revoked
     assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).status_code == 200
-    assert chain.kill_count == 1
+    assert chain.revoke_count == 1
     new_grant = make_grant(client)
-    assert new_grant["contract_address"] != grant["contract_address"]
+    assert new_grant["contract_address"] == grant["contract_address"]
     assert new_grant["status"] == "active"
 
 
@@ -305,86 +323,112 @@ def test_kill_confirms_idempotently_and_regrant_uses_new_contract(chain_setup):
 def test_rpc_failure_blocks_access_and_allows_retry(chain_setup, failure):
     client, chain, _ = chain_setup
     grant = make_grant(client)
-    chain.kill_failure = failure
+    chain.revoke_failure = failure
     response = client.delete(f"/api/grants/{grant['id']}", headers=headers())
     assert response.status_code == 202 and response.get_json()["status"] == "revoking"
     # The access endpoint must deny even when RPC cannot be reached.
     assert client.post(f"/api/grants/{grant['id']}/access", headers=headers("clinician")).status_code == 403
     assert client.post(f"/api/grants/{grant['id']}/resume", headers=headers()).get_json()["status"] == "revoking"
     assert make_grant(client)["id"] == grant["id"]  # No duplicate while revoking.
-    chain.kill_failure = None
-    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["contract_killed"]
+    chain.revoke_failure = None
+    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["registry_revoked"]
 
 
-def test_kill_timeout_persists_across_restart_without_resubmission(chain_setup):
+def test_registry_revoke_timeout_persists_across_restart_without_resubmission(chain_setup):
     client, chain, directory = chain_setup
     grant = make_grant(client)
-    chain.kill_failure = "timeout"
+    chain.revoke_failure = "timeout"
     result = client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()
-    assert result["status"] == "revoking" and result["kill_tx"]
+    assert result["status"] == "revoking" and result["revoke_tx"]
     restarted = create_app(dev=True, data_dir=directory, master_key=b"k" * 32, chain=chain).test_client()
     assert restarted.delete(f"/api/grants/{grant['id']}", headers=headers()).status_code == 202
-    assert chain.kill_count == 1
-    chain.receipts[result["kill_tx"]] = {"status": 1}
-    chain.killed.add(grant["contract_address"])
+    assert chain.revoke_count == 1
+    chain.receipts[result["revoke_tx"]] = {"status": 1}
+    chain.revoked.add((bytes.fromhex(grant["resource_id"][2:]), grant["recipient_wallet"]))
     current = restarted.get("/api/grants", headers=headers()).get_json()[0]
-    assert current["status"] == "revoked" and current["contract_killed"]
-    assert chain.kill_count == 1
+    assert current["status"] == "revoked" and current["registry_revoked"]
+    assert chain.revoke_count == 1
 
 
-def test_reverted_kill_stays_blocked_until_retry(chain_setup):
+def test_reverted_revoke_stays_blocked_until_retry(chain_setup):
     client, chain, _ = chain_setup
     grant = make_grant(client)
-    chain.kill_failure = "timeout"
+    chain.revoke_failure = "timeout"
     result = client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()
-    chain.receipts[result["kill_tx"]] = {"status": 0}
+    chain.receipts[result["revoke_tx"]] = {"status": 0}
     current = client.get("/api/grants", headers=headers()).get_json()[0]
-    assert current["status"] == "revoking" and current["kill_tx"] is None
+    assert current["status"] == "revoking" and current["revoke_tx"] is None
     assert client.post(f"/api/grants/{grant['id']}/access", headers=headers("clinician")).status_code == 403
-    chain.kill_failure = None
-    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["contract_killed"]
-    assert chain.kill_count == 2
+    chain.revoke_failure = None
+    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["registry_revoked"]
+    assert chain.revoke_count == 2
 
 
-def test_kill_success_receipt_without_disabled_state_does_not_mark_revoked(chain_setup):
+def test_registry_revoke_success_receipt_without_disabled_state_does_not_mark_revoked(chain_setup):
     client, chain, _ = chain_setup
     grant = make_grant(client)
-    chain.kill_failure = "timeout"
+    chain.revoke_failure = "timeout"
     result = client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()
-    chain.receipts[result["kill_tx"]] = {"status": 1}
+    chain.receipts[result["revoke_tx"]] = {"status": 1}
     current = client.get("/api/grants", headers=headers()).get_json()[0]
-    assert current["status"] == "revoking" and not current["contract_killed"]
+    assert current["status"] == "revoking" and not current["registry_revoked"]
 
 
-def test_revoke_waits_for_deployment_then_kills_without_registering(chain_setup):
+def test_revoke_before_registry_ready_never_registers(chain_setup):
     client, chain, _ = chain_setup
     chain.timeout_deploy = True
     grant = make_grant(client)
-    receipt = chain.receipts.pop(grant["deploy_tx"])
+    result = client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()
+    assert result["status"] == "revoked" and not result["registry_revoked"]
+    assert chain.register_count == chain.revoke_count == 0
+
+
+def test_revoke_waits_for_pending_grant_transaction(chain_setup):
+    client, chain, _ = chain_setup
+    chain.timeout_register = True
+    grant = make_grant(client)
+    receipt = chain.receipts.pop(grant["register_tx"])
     assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).status_code == 202
-    assert chain.kill_count == 0
-    chain.receipts[grant["deploy_tx"]] = receipt
-    current = client.get("/api/grants", headers=headers()).get_json()[0]
-    assert current["status"] == "revoking" and current["contract_address"]
-    assert chain.kill_count == 0  # GET never sends transactions.
-    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["contract_killed"]
-    assert chain.register_count == 0
+    assert chain.revoke_count == 0
+    chain.receipts[grant["register_tx"]] = receipt
+    assert client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()["status"] == "revoked"
+    assert chain.revoke_count == 1
 
 
-def test_failed_deployment_needs_no_kill(chain_setup):
-    client, chain, _ = chain_setup
-    chain.timeout_deploy = True
-    grant = make_grant(client)
-    chain.receipts[grant["deploy_tx"]] = {"status": 0}
-    result = client.delete(f"/api/grants/{grant['id']}", headers=headers()).get_json()
-    assert result["status"] == "revoked" and not result["contract_killed"]
-    assert chain.kill_count == 0
-
-
-def test_external_kill_is_detected_before_access(chain_setup):
+def test_external_revoke_is_detected_before_access(chain_setup):
     client, chain, _ = chain_setup
     grant = make_grant(client)
-    chain.killed.add(grant["contract_address"])
+    chain.revoked.add((bytes.fromhex(grant["resource_id"][2:]), grant["recipient_wallet"]))
     assert client.post(f"/api/grants/{grant['id']}/access", headers=headers("clinician")).status_code == 403
     assert chain.access_count == 0
-    assert client.get("/api/grants", headers=headers()).get_json()[0]["contract_killed"]
+    assert client.get("/api/grants", headers=headers()).get_json()[0]["registry_revoked"]
+
+
+def test_resource_timeout_is_shared_across_recipients(chain_setup, monkeypatch):
+    client, chain, _ = chain_setup
+    original = chain.register_resource
+    def timeout(*args):
+        original(*args)
+        raise TimeoutError()
+    monkeypatch.setattr(chain, "register_resource", timeout)
+    first = make_grant(client)
+    assert first["status"] == "pending" and first["resource_tx"]
+    receipt = chain.receipts.pop(first["resource_tx"])
+    second = make_grant(client, recipient="outsider")
+    assert second["status"] == "pending" and chain.register_count == 0
+    assert chain.deploy_count == 1
+    chain.receipts[first["resource_tx"]] = receipt
+    for grant in [first, second]:
+        result = client.post(f"/api/grants/{grant['id']}/resume", headers=headers()).get_json()
+        assert result["status"] == "active"
+        assert result["resource_id"] == first["resource_id"]
+        assert result["contract_address"] == first["contract_address"]
+    assert len(chain.resources) == 1 and chain.register_count == 2
+
+
+def test_old_database_is_not_reused_or_deleted(tmp_path):
+    old = tmp_path / "pair-grants.sqlite3"
+    old.write_bytes(b"old pair data")
+    create_app(dev=True, data_dir=tmp_path, master_key=b"k" * 32)
+    assert old.read_bytes() == b"old pair data"
+    assert (tmp_path / "registry-grants.sqlite3").exists()

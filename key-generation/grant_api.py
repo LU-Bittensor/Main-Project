@@ -54,7 +54,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     if not dev and (not supabase_url or not supabase_key):
         raise RuntimeError("Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY")
     allowed_origins = set(os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","))
-    db_path = directory / "pair-grants.sqlite3"
+    db_path = directory / "registry-grants.sqlite3"
     lock = RLock()
 
     def db():
@@ -80,21 +80,24 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id),
                 recipient_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL,
                 records TEXT NOT NULL, record_name TEXT NOT NULL, identifier TEXT NOT NULL,
-                contract_address TEXT, deploy_tx TEXT, register_tx TEXT, kill_tx TEXT,
-                contract_killed INTEGER NOT NULL DEFAULT 0,
+                contract_address TEXT, deploy_tx TEXT, resource_tx TEXT, register_tx TEXT, revoke_tx TEXT,
+                registry_revoked INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL, secret BLOB,
                 tx_hash TEXT, error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS registry_resources (
+                identifier TEXT PRIMARY KEY, tx_hash TEXT);
             CREATE UNIQUE INDEX IF NOT EXISTS live_grant ON grants(owner_id, recipient_id, records)
                 WHERE status IN ('pending', 'active', 'revoking');
         """)
         # Non-destructive schema upgrade for existing databases.
         columns = {row["name"] for row in db().execute("PRAGMA table_info(grants)")}
-        if "kill_tx" not in columns:
-            db().execute("ALTER TABLE grants ADD COLUMN kill_tx TEXT")
-        if "contract_killed" not in columns:
-            db().execute("ALTER TABLE grants ADD COLUMN contract_killed INTEGER NOT NULL DEFAULT 0")
+        if "revoke_tx" not in columns:
+            db().execute("ALTER TABLE grants ADD COLUMN revoke_tx TEXT")
+        if "registry_revoked" not in columns:
+            db().execute("ALTER TABLE grants ADD COLUMN registry_revoked INTEGER NOT NULL DEFAULT 0")
         # Do not silently reuse off-chain permissions against a different chain or master key.
-        environment = json.dumps({"protocol": "dh-pair-v1", "dev": dev,
+        environment = json.dumps({"protocol": "dh-registry-v1", "dev": dev,
+                                  "auth_project": None if dev else supabase_url,
                                   "chain": None if chain is None else chain.identity})
         previous = db().execute("SELECT value FROM settings WHERE name='environment'").fetchone()
         if previous and previous[0] != environment:
@@ -201,8 +204,10 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     def serialize(row):
         item = {key: row[key] for key in ("id", "owner_id", "recipient_id", "scope", "status", "tx_hash", "error",
-                       "record_name", "contract_address", "deploy_tx", "register_tx", "kill_tx")}
-        item["contract_killed"] = bool(row["contract_killed"])
+                       "record_name", "contract_address", "deploy_tx", "resource_tx", "register_tx", "revoke_tx")}
+        item["resource_id"] = "0x" + row["identifier"]
+        item["recipient_wallet"] = db().execute("SELECT wallet FROM users WHERE id=?", (row["recipient_id"],)).fetchone()[0]
+        item["registry_revoked"] = bool(row["registry_revoked"])
         item["record_ids"] = json.loads(row["records"])
         item["chain_enabled"] = chain is not None
         for field in ("owner", "recipient"):
@@ -223,98 +228,147 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         db().commit()
         return get_grant(grant_id)
 
+    def setting(name, value=None):
+        if value is not None:
+            db().execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (name, value))
+            db().commit()
+        row = db().execute("SELECT value FROM settings WHERE name=?", (name,)).fetchone()
+        return row[0] if row else None
+
+    def registry():
+        """One deployment per store, with its hash persisted before broadcast."""
+        address = setting("registry_address") or chain.registry_address
+        if address:
+            chain.validate_registry(address)
+            setting("registry_address", address)
+            return address
+        tx = setting("registry_deploy_tx")
+        if not tx:
+            chain.deploy(lambda tx: setting("registry_deploy_tx", tx))
+            tx = setting("registry_deploy_tx")
+        receipt = chain.receipt(tx)
+        if receipt is None:
+            raise RuntimeError("Registry deployment pending")
+        if receipt["status"] != 1:
+            # A mined revert is safe to retry; an unknown receipt is not.
+            db().execute("DELETE FROM settings WHERE name='registry_deploy_tx'")
+            db().commit()
+            raise RuntimeError("Registry deployment reverted; resume to retry")
+        address = receipt["contractAddress"]
+        chain.validate_registry(address)
+        setting("registry_address", address)
+        return address
+
+    def pair(row):
+        wallet = db().execute("SELECT wallet FROM users WHERE id=?", (row["recipient_id"],)).fetchone()[0]
+        return bytes.fromhex(row["identifier"]), wallet
+
+    def secret_for(row):
+        return decrypt_secret(master_key, row["secret"], "grant:" + row["id"])
+
     def reconcile(row):
-        """Read receipts only. Deployment success alone must not activate a grant."""
         if row["status"] == "revoking":
             return reconcile_revocation(row)
-        if chain and row["status"] == "active" and chain.is_killed(row["contract_address"]):
-            return update(row["id"], status="revoked", contract_killed=1, error=None)
-        if not chain or row["status"] != "pending":
+        if not chain or row["status"] not in ("pending", "active"):
             return row
-        if row["deploy_tx"]:
-            receipt = chain.receipt(row["deploy_tx"])
-            if receipt is None:
-                return row
-            if receipt["status"] != 1:
-                return update(row["id"], status="failed", error="Contract deployment reverted.")
-            row = update(row["id"], contract_address=receipt["contractAddress"])
-        if row["contract_address"] and chain.is_killed(row["contract_address"]):
-            return update(row["id"], status="revoked", contract_killed=1, error=None)
-        if row["register_tx"]:
+        resource, wallet = pair(row)
+        if row["status"] == "active":
+            if not chain.has_grant(row["contract_address"], resource, wallet):
+                return update(row["id"], status="revoked", registry_revoked=1, error=None)
+            if not chain.matches(row["contract_address"], resource, wallet, secret_for(row)):
+                return update(row["id"], status="failed", error="Registry commitment changed. Revoke before sharing again.")
+        elif row["register_tx"]:
             receipt = chain.receipt(row["register_tx"])
             if receipt is None:
                 return row
             if receipt["status"] != 1:
-                return update(row["id"], status="failed", error="Commitment registration reverted.")
-            secret = decrypt_secret(master_key, row["secret"], "grant:" + row["id"])
-            if not chain.matches(row["contract_address"], row["identifier"], secret):
-                return update(row["id"], status="failed", error="Contract does not match this grant.")
-            row = update(row["id"], status="active", error=None)
+                return update(row["id"], status="failed", error="Grant transaction reverted.")
+            if not chain.matches(row["contract_address"], resource, wallet, secret_for(row)):
+                return update(row["id"], status="failed", error="Registry no longer matches this grant.")
+            return update(row["id"], status="active", error=None)
         return row
 
     def reconcile_revocation(row):
-        """No transactions here: confirm disablement without ever reactivating access."""
         try:
-            if not chain:
+            if not chain or not row["contract_address"]:
                 return update(row["id"], status="revoked", error=None)
-            if not row["contract_address"]:
-                if not row["deploy_tx"]:
-                    return update(row["id"], status="revoked", error=None)
-                receipt = chain.receipt(row["deploy_tx"])
+            # Never declare revocation complete while a grant transaction could still mine.
+            if row["register_tx"] and chain.receipt(row["register_tx"]) is None:
+                return update(row["id"], error="API access blocked. Waiting for grant transaction before revocation.")
+            if row["revoke_tx"]:
+                receipt = chain.receipt(row["revoke_tx"])
                 if receipt is None:
-                    return update(row["id"], error="API access blocked. Waiting for deployment; retry revocation after it confirms.")
+                    return update(row["id"], error="API access blocked. Revocation transaction pending.")
                 if receipt["status"] != 1:
-                    return update(row["id"], status="revoked", error=None)
-                row = update(row["id"], contract_address=receipt["contractAddress"])
-            if chain.is_killed(row["contract_address"]):
-                return update(row["id"], status="revoked", contract_killed=1, error=None)
-            if row["kill_tx"]:
-                receipt = chain.receipt(row["kill_tx"])
-                if receipt is None:
-                    return update(row["id"], error="API access blocked. Waiting for the kill transaction to confirm.")
-                # A reverted kill is retryable; a receipt alone is not proof of disablement.
-                return update(row["id"], kill_tx=None, error="Contract is not disabled. Retry revocation; check operator ownership and gas funds.")
-            return update(row["id"], error="API access blocked. Contract disablement needs a revocation retry.")
+                    row = update(row["id"], revoke_tx=None, error="Revocation reverted; retry.")
+            resource, wallet = pair(row)
+            if not chain.has_grant(row["contract_address"], resource, wallet):
+                return update(row["id"], status="revoked", registry_revoked=1, error=None)
+            if row["revoke_tx"]:
+                row = update(row["id"], revoke_tx=None)
+            return update(row["id"], error="API access blocked. Retry registry revocation.")
         except Exception as error:
             app.logger.error("Revocation confirmation interrupted: %s", type(error).__name__)
-            return update(row["id"], error="API access blocked. Could not confirm contract disablement; refresh or retry revocation.")
+            return update(row["id"], error="API access blocked. Could not confirm revocation; refresh or retry.")
 
     def advance_revocation(row):
         row = reconcile_revocation(row)
-        if row["status"] != "revoking" or not row["contract_address"] or row["kill_tx"]:
+        if row["status"] != "revoking" or row["revoke_tx"]:
             return row
         try:
-            chain.kill(row["contract_address"], lambda tx: update(row["id"], kill_tx=tx, tx_hash=tx))
+            if row["register_tx"] and chain.receipt(row["register_tx"]) is None:
+                return row
+            resource, wallet = pair(row)
+            chain.revoke(row["contract_address"], resource, wallet,
+                         lambda tx: update(row["id"], revoke_tx=tx, tx_hash=tx))
             return reconcile_revocation(get_grant(row["id"]))
         except Exception as error:
-            app.logger.error("Contract kill interrupted: %s", type(error).__name__)
-            return update(row["id"], error="API access blocked. Kill transaction not confirmed; refresh or retry revocation.")
+            app.logger.error("Registry revocation interrupted: %s", type(error).__name__)
+            return update(row["id"], error="API access blocked. Revocation not confirmed; refresh or retry.")
 
     def advance(row):
-        """Resume setup using persisted transaction hashes; never deploy a pair twice on timeout."""
         try:
             row = reconcile(row)
             if row["status"] != "pending":
                 return row
             if not chain:
                 return update(row["id"], status="active", error=None)
-            if not row["deploy_tx"]:
-                chain.deploy(row["identifier"], lambda tx: update(row["id"], deploy_tx=tx, tx_hash=tx))
-                row = reconcile(get_grant(row["id"]))
-            if not row["contract_address"] or row["status"] != "pending":
-                return row
+            address = registry()
+            row = update(row["id"], contract_address=address, deploy_tx=setting("registry_deploy_tx"))
+            resource, wallet = pair(row)
+            # There are no file bytes/CIDs in the records API yet. Use an explicit
+            # metadata reference and its hash, not a fabricated medical-file digest.
+            cid = "medilink:record:" + row["identifier"]
+            data_hash = hashlib.sha256(cid.encode()).digest()
+            saved = db().execute("SELECT tx_hash FROM registry_resources WHERE identifier=?", (row["identifier"],)).fetchone()
+            resource_tx = saved[0] if saved else None
+            if resource_tx:
+                receipt = chain.receipt(resource_tx)
+                if receipt is None:
+                    return row
+                if receipt["status"] != 1:
+                    db().execute("DELETE FROM registry_resources WHERE identifier=?", (row["identifier"],))
+                    db().commit()
+                    raise RuntimeError("Resource registration reverted; resume to retry")
+            if not chain.resource_matches(address, resource, data_hash, cid):
+                def save_resource(tx):
+                    db().execute("INSERT OR REPLACE INTO registry_resources VALUES (?,?)", (row["identifier"], tx))
+                    db().commit()
+                    update(row["id"], resource_tx=tx, tx_hash=tx)
+                chain.register_resource(address, resource, data_hash, cid, save_resource)
+            saved = db().execute("SELECT tx_hash FROM registry_resources WHERE identifier=?", (row["identifier"],)).fetchone()
+            row = update(row["id"], resource_tx=saved[0] if saved else None)
             if not row["register_tx"]:
-                secret = decrypt_secret(master_key, row["secret"], "grant:" + row["id"])
-                chain.register(row["contract_address"], secret,
+                chain.register(address, resource, wallet, secret_for(row),
                                lambda tx: update(row["id"], register_tx=tx, tx_hash=tx))
             return reconcile(get_grant(row["id"]))
         except Exception as error:
-            app.logger.error("Pair setup interrupted: %s", type(error).__name__)
-            return update(row["id"], error="Setup not confirmed. Refresh, then Resume setup. Check RPC and operator gas funds if it persists.")
+            app.logger.error("Registry setup interrupted: %s", type(error).__name__)
+            return update(row["id"], error="Setup not confirmed. Refresh, then Resume setup. Check registry, RPC and operator gas funds.")
 
     @app.get("/api/health")
     def health():
-        return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-pair-v1")
+        return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-registry-v1", registry_address=setting("registry_address"))
 
     @app.post("/api/enroll")
     def enroll_self():
@@ -361,7 +415,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             results = []
             for record_id in record_ids:
                 record_json = json.dumps([record_id])
-                existing = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND records=? AND status IN ('pending','active','revoking')",
+                existing = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND records=? AND status IN ('pending','active','revoking','failed')",
                                         (g.uid, recipient, record_json)).fetchone()
                 if existing:
                     results.append(serialize(advance(existing)))
@@ -369,7 +423,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 grant_id = str(uuid.uuid4())
                 private = decrypt_secret(master_key, owner["private_key"], "user:" + g.uid)
                 envelope = create_access_grant(private, peer["public_key"], grant_id, master_key)
-                identifier = hashlib.sha256(json.dumps([g.uid, recipient, record_id, grant_id]).encode()).hexdigest()
+                identifier = hashlib.sha256(json.dumps(["medilink-resource-v1", supabase_url or "local-demo", g.uid, record_id]).encode()).hexdigest()
                 db().execute("INSERT INTO grants (id,owner_id,recipient_id,scope,records,record_name,identifier,status,secret) VALUES (?,?,?,?,?,?,?,'pending',?)",
                              (grant_id, g.uid, recipient, owned[record_id]["kind"], record_json,
                               owned[record_id]["name"], identifier, envelope))
@@ -405,7 +459,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 raise APIError("Access denied: this grant is not active for your account", 403)
             row = reconcile(row)
             if row["status"] != "active":
-                raise APIError("Access denied: the contract is deactivated", 403)
+                raise APIError("Access denied: the registry grant is not active", 403)
             peer = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
             owner = db().execute("SELECT * FROM users WHERE id=?", (row["owner_id"],)).fetchone()
             private = decrypt_secret(master_key, peer["private_key"], "user:" + g.uid)
@@ -417,10 +471,10 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                       "record_ids": json.loads(row["records"]), "contract_address": row["contract_address"],
                       "chain_verified": False}
             if chain:
-                if not chain.matches(row["contract_address"], row["identifier"], derived):
+                if not chain.matches(row["contract_address"], *pair(row), derived):
                     raise APIError("Contract no longer matches this grant. Check for a chain reset.", 409)
                 wallet_key = decrypt_secret(master_key, peer["wallet_key"], "wallet:" + g.uid)
-                verification = chain.request_access(row["contract_address"], derived, wallet_key)
+                verification = chain.request_access(row["contract_address"], bytes.fromhex(row["identifier"]), derived, wallet_key)
                 if not verification["allowed"]:
                     raise APIError("AccessDenied event received from contract", 403)
                 result.update(verification, chain_verified=True)
@@ -430,7 +484,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     return app
 
 
-def local_chain_data_dir(chain):
+def local_chain_data_dir(chain, dev=True):
     """Keep test databases separate across Hardhat resets and contract builds."""
     if chain.chain_id != 31337:
         raise RuntimeError("Automatic data directories are only supported for local Hardhat testing")
@@ -438,7 +492,7 @@ def local_chain_data_dir(chain):
     instance = metadata.get("result", {}).get("instanceId")
     if not isinstance(instance, str) or not instance:
         raise RuntimeError("Cannot identify the Hardhat instance; start the local Hardhat node first")
-    identity = json.dumps(["dh-pair-v1", chain.identity, instance], sort_keys=True)
+    identity = json.dumps(["dh-registry-v1", dev, os.getenv("SUPABASE_URL", "") if not dev else "", chain.identity, instance], sort_keys=True)
     fingerprint = hashlib.sha256(identity.encode()).hexdigest()
     base = Path(os.getenv("GRANT_DATA_DIR", Path(__file__).parent / ".grant-pairs-local"))
     return base / fingerprint
@@ -447,19 +501,19 @@ def local_chain_data_dir(chain):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dev", action="store_true", help="Loopback-only fixture identities; never deploy")
-    parser.add_argument("--chain", action="store_true", help="Deploy one contract per recipient-record pair and verify access on-chain")
+    parser.add_argument("--chain", action="store_true", help="Use one shared AccessRegistry and verify access on-chain")
     parser.add_argument("--port", type=int, default=5001)
     parser.add_argument("--auto-data-dir", action="store_true",
                         help="Use a separate test directory per Hardhat instance and contract build")
     args = parser.parse_args()
-    if args.auto_data_dir and not (args.dev and args.chain):
-        parser.error("--auto-data-dir requires --dev --chain")
+    if args.auto_data_dir and not args.chain:
+        parser.error("--auto-data-dir requires --chain")
     chain = None
     if args.chain:
         from chain_grants import ChainGrants
         chain = ChainGrants(os.environ["RPC_URL"], os.environ["OWNER_PRIVATE_KEY"],
-                            fund_local_wallets=args.dev and os.getenv("FUND_LOCAL_WALLETS") == "1")
-    directory = local_chain_data_dir(chain) if args.auto_data_dir else None
+                            fund_local_wallets=os.getenv("FUND_LOCAL_WALLETS") == "1")
+    directory = local_chain_data_dir(chain, dev=args.dev) if args.auto_data_dir else None
     if directory is not None:
         print(f"Local test data: {directory.resolve()}", flush=True)
     app = create_app(dev=args.dev, chain=chain, data_dir=directory)

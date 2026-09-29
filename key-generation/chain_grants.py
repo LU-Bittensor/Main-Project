@@ -1,9 +1,10 @@
-"""One permanently revocable DataAccessControl contract per recipient-record grant.
+"""Shared AccessRegistry adapter; the API operator owns registered resources.
 
 Prototype: the public-commitment challenge is forgeable. API authentication and
 record ownership checks remain mandatory; this is not a secure on-chain proof.
 """
 import json
+import os
 from pathlib import Path
 from threading import RLock
 
@@ -21,9 +22,11 @@ class ChainGrants:
         self.chain_id = self.w3.eth.chain_id
         if self.chain_id in (945, 964):
             self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-        path = Path(__file__).parent / "testContractDeployment/artifacts/contracts/DataAccessControl.sol/DataAccessControl.json"
+        path = Path(__file__).parent / "testContractDeployment/artifacts/contracts/AccessRegistry.sol/AccessRegistry.json"
         artifact = json.loads(path.read_text())
         self.abi = artifact["abi"]
+        self.runtime = artifact["deployedBytecode"]
+        self.registry_address = os.getenv("REGISTRY_ADDRESS") or None
         self.factory = self.w3.eth.contract(abi=self.abi, bytecode=artifact["bytecode"])
         self.account = self.w3.eth.account.from_key(operator_key)
         self.lock = RLock()
@@ -31,7 +34,7 @@ class ChainGrants:
         if fund_local_wallets and self.chain_id != 31337:
             raise RuntimeError("Automatic test funding is restricted to local Hardhat chain 31337")
         self.identity = [self.chain_id, self.w3.eth.get_block(0)["hash"].hex(),
-                         self.account.address, Web3.keccak(hexstr=artifact["bytecode"]).hex()]
+                         self.account.address, Web3.keccak(hexstr=artifact["bytecode"]).hex(), self.registry_address]
 
     def contract(self, address):
         return self.w3.eth.contract(address=Web3.to_checksum_address(address), abi=self.abi)
@@ -54,18 +57,35 @@ class ChainGrants:
                 raise RuntimeError("Transaction reverted")
             return receipt
 
-    def deploy(self, identifier, save_hash):
-        return self.transact(self.factory.constructor(identifier), self.account.key, save_hash)
+    def validate_registry(self, address):
+        if bytes(self.w3.eth.get_code(address)) != bytes.fromhex(self.runtime.removeprefix("0x")):
+            raise RuntimeError("Registry bytecode does not match AccessRegistry.sol; check chain/address")
 
-    def register(self, address, shared_secret, save_hash):
-        return self.transact(self.contract(address).functions.registerCommitment(
-            derive_commitment(shared_secret)), self.account.key, save_hash)
+    def deploy(self, save_hash):
+        return self.transact(self.factory.constructor(), self.account.key, save_hash)
 
-    def is_killed(self, address):
-        return self.contract(address).functions.isKilled().call()
+    def resource_matches(self, address, resource_id, data_hash, cid):
+        owner, stored_hash, stored_cid, exists = self.contract(address).functions.resources(resource_id).call()
+        if not exists:
+            return False
+        if owner != self.account.address or stored_hash != data_hash or stored_cid != cid:
+            raise RuntimeError("Resource already registered with different ownership or metadata")
+        return True
 
-    def kill(self, address, save_hash):
-        return self.transact(self.contract(address).functions.killContract(), self.account.key, save_hash)
+    def register_resource(self, address, resource_id, data_hash, cid, save_hash):
+        return self.transact(self.contract(address).functions.registerResource(
+            resource_id, data_hash, cid), self.account.key, save_hash)
+
+    def register(self, address, resource_id, wallet, shared_secret, save_hash):
+        return self.transact(self.contract(address).functions.grantAccess(
+            resource_id, wallet, derive_commitment(shared_secret)), self.account.key, save_hash)
+
+    def has_grant(self, address, resource_id, wallet):
+        return self.contract(address).functions.hasGrant(resource_id, wallet).call()
+
+    def revoke(self, address, resource_id, wallet, save_hash):
+        return self.transact(self.contract(address).functions.revokeAccess(
+            resource_id, wallet), self.account.key, save_hash)
 
     def receipt(self, tx_hash):
         try:
@@ -73,13 +93,10 @@ class ChainGrants:
         except TransactionNotFound:
             return None
 
-    def matches(self, address, identifier, shared_secret):
-        contract = self.contract(address)
-        return (contract.functions.owner().call() == self.account.address and
-                contract.functions.dataIdentifier().call() == identifier and
-                contract.functions.commitment().call() == derive_commitment(shared_secret))
+    def matches(self, address, resource_id, wallet, shared_secret):
+        return self.contract(address).functions.commitments(resource_id, wallet).call() == derive_commitment(shared_secret)
 
-    def request_access(self, address, shared_secret, recipient_key):
+    def request_access(self, address, resource_id, shared_secret, recipient_key):
         # Serialize both transactions so another request cannot replace this wallet's challenge.
         with self.lock:
             account = self.w3.eth.account.from_key(recipient_key)
@@ -88,17 +105,17 @@ class ChainGrants:
                 if "error" in result:
                     raise RuntimeError("Local wallet funding failed")
             contract = self.contract(address)
-            if contract.functions.isKilled().call():
+            if not contract.functions.hasGrant(resource_id, account.address).call():
                 return {"allowed": False}
-            challenge = self.transact(contract.functions.requestChallenge(), recipient_key)
+            challenge = self.transact(contract.functions.requestChallenge(resource_id), recipient_key)
             logs = contract.events.ChallengeIssued().process_receipt(challenge, errors=DISCARD)
-            if len(logs) != 1 or logs[0]["args"]["requester"] != account.address:
+            if len(logs) != 1 or (logs[0]["args"]["requester"] != account.address or logs[0]["args"]["resourceId"] != resource_id):
                 raise RuntimeError("Missing recipient challenge event")
             response = compute_response(shared_secret, logs[0]["args"]["nonce"])
-            verification = self.transact(contract.functions.verifyAccess(response), recipient_key)
+            verification = self.transact(contract.functions.verifyAccess(resource_id, response), recipient_key)
             granted = contract.events.AccessGranted().process_receipt(verification, errors=DISCARD)
             return {
-                "allowed": any(log["args"]["requester"] == account.address for log in granted),
+                "allowed": any(log["args"]["requester"] == account.address and log["args"]["resourceId"] == resource_id for log in granted),
                 "challenge_tx": Web3.to_hex(challenge["transactionHash"]),
                 "verify_tx": Web3.to_hex(verification["transactionHash"]),
             }
