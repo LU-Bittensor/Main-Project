@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from protocol import MessageSynapse
+from logging_setup import configure_app_logging, silence_noisy_loggers
 
 log = logging.getLogger("minerv1")
 
@@ -135,7 +136,18 @@ class MinerV1:
             default=os.getenv("AXON_IP", "auto"),
             help="Public IP to publish via ServeAxon. Use 'auto' to detect (default).",
         )
-        parser.add_argument("--logging.info", dest="logging_info", action="store_true")
+        parser.add_argument(
+            "--logging.debug",
+            dest="logging_debug",
+            action="store_true",
+            help="Enable DEBUG for minerv1 subnet logic (RPC libraries stay quiet).",
+        )
+        parser.add_argument(
+            "--logging.info",
+            dest="logging_info",
+            action="store_true",
+            help="Deprecated alias; INFO is the default.",
+        )
         ns = parser.parse_args()
         ns.db_path = os.path.expanduser(ns.db_path)
         ns.wallet_path = os.path.expanduser(ns.wallet_path)
@@ -165,8 +177,12 @@ class MinerV1:
         )
 
     def setup_logging(self):
-        level = logging.INFO if getattr(self.config, "logging_info", False) else logging.DEBUG
-        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        # Default INFO for subnet logic; never flood with bittensor/websocket RPC DEBUG.
+        if getattr(self.config, "logging_debug", False):
+            level = logging.DEBUG
+        else:
+            level = logging.INFO
+        configure_app_logging(("minerv1",), level=level)
 
     def setup_bittensor_objects(self):
         self.wallet = Wallet(
@@ -183,6 +199,8 @@ class MinerV1:
         self.axon_ip = self._resolve_public_ip(self.config.axon_ip)
         self.axon_port = int(self.config.axon_port)
         log.info("axon will publish as %s:%s", self.axon_ip, self.axon_port)
+        # Bittensor init often re-enables DEBUG on transport loggers.
+        silence_noisy_loggers(logging.WARNING)
 
     def _init_schema(self):
         self.db.executescript(
@@ -494,19 +512,63 @@ class MinerV1:
     def handle_merkle_proof_challenge(self, synapse: MessageSynapse) -> MessageSynapse:
         challenge = self._payload(synapse)
         batch_cid = challenge.get("batch_cid")
-        tree = self.batch_tree_cache.get(batch_cid)
+        tree = self._get_or_rebuild_batch_tree(batch_cid)
         if not tree:
+            log.warning(
+                "merkle challenge: no tree for batch_cid=%s (cache miss + DB rebuild failed)",
+                batch_cid,
+            )
             challenge["proof_path"] = None
             return self._set_payload(synapse, challenge)
         try:
             proof = tree.generate_proof(challenge["target_receipt_cid"])
-        except Exception:
+        except Exception as exc:
+            log.warning(
+                "merkle challenge: proof gen failed batch=%s target=%s err=%s",
+                batch_cid,
+                challenge.get("target_receipt_cid"),
+                exc,
+            )
             challenge["proof_path"] = None
             return self._set_payload(synapse, challenge)
         msg = (challenge["batch_cid"] + challenge["target_receipt_cid"] + challenge["nonce"]).encode("utf-8")
         challenge["proof_path"] = proof
         challenge["miner_sig"] = self.wallet.hotkey.sign(msg).hex()
         return self._set_payload(synapse, challenge)
+
+    def _get_or_rebuild_batch_tree(self, batch_cid: Optional[str]) -> Optional[MerkleTree]:
+        """Return cached tree, or rebuild from durable batch envelope (survives process restart)."""
+        if not batch_cid:
+            return None
+        cached = self.batch_tree_cache.get(batch_cid)
+        if cached is not None:
+            return cached
+        row = self.db.execute(
+            "SELECT miner_batch_cid, merkle_root, receipt_count FROM batches WHERE batch_cid = ?",
+            (batch_cid,),
+        ).fetchone()
+        if not row or not row["miner_batch_cid"]:
+            return None
+        try:
+            envelope = json.loads(self.ipfs.cat(row["miner_batch_cid"]).decode("utf-8"))
+        except Exception as exc:
+            log.warning("merkle rebuild: ipfs cat failed batch=%s: %s", batch_cid, exc)
+            return None
+        cids = sorted(envelope.get("receipt_cids") or [])
+        if not cids:
+            return None
+        tree = MerkleTree(cids)
+        if tree.root_hex != (envelope.get("merkle_root") or row["merkle_root"]):
+            log.warning(
+                "merkle rebuild: root mismatch batch=%s rebuilt=%s stored=%s",
+                batch_cid,
+                tree.root_hex,
+                envelope.get("merkle_root") or row["merkle_root"],
+            )
+            return None
+        self.batch_tree_cache[batch_cid] = tree
+        log.info("merkle rebuild: restored tree for batch_cid=%s leaves=%s", batch_cid, len(cids))
+        return tree
 
     def handle_index_query(self, synapse: MessageSynapse) -> MessageSynapse:
         query = self._payload(synapse)

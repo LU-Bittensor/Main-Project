@@ -1,8 +1,17 @@
 import typing
 from dataclasses import dataclass, field
 
-from bittensor import Synapse
 from pydantic import BaseModel
+
+try:
+    from bittensor import Synapse
+except ImportError:  # Bittensor v11+ no longer ships Synapse
+    class Synapse:  # type: ignore[no-redef]
+        """Minimal stand-in so legacy typed synapses still import on v11."""
+
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 
 
 class Immunization(BaseModel):
