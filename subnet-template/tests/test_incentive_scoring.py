@@ -47,6 +47,9 @@ def make_scoring_validator() -> ValidatorV1:
     v.batch_receipt_cids = {}
     v.receipt_cache = {}
     v.merkle_tree_cache = {}
+    v.resource_cache = {}
+    v.seen_log_keys = set()
+    v.batch_pending = []
     v.score_ema = {}
     v.last_weight_block = 0
     v.my_uid = 0
@@ -338,6 +341,45 @@ class TestSelectChallengeTarget(unittest.TestCase):
         v = make_scoring_validator()
         v.actor_tips = {"0xaaa": {"tip_cid": "bafytip", "tip_data_cid": "x", "receipt_count": 1}}
         self.assertEqual(v.select_challenge_target(0), (None, None, None))
+
+
+class TestAccessGrantedAuditCid(unittest.TestCase):
+    def test_resource_cache_preferred_over_hash_cid(self):
+        v = make_scoring_validator()
+        rid = "0x" + "aa" * 32
+        hippius = "ehr/tenant/patient/record/v1/payload.bin"
+        v._cache_resource(rid, hippius, data_hash="0x" + "bb" * 32)
+        got = v._lookup_resource_data_cid(rid, "0x" + "bb" * 32)
+        self.assertEqual(got, hippius)
+
+    def test_log_key_dedup_format(self):
+        key = ValidatorV1._log_key(
+            {"transactionHash": bytes.fromhex("ab" * 32), "logIndex": 7}
+        )
+        self.assertTrue(key.startswith("0x"))
+        self.assertTrue(key.endswith("-7"))
+
+    def test_build_receipt_audit_uses_tx_id(self):
+        from validatorv1 import CommitmentEvent
+
+        v = make_scoring_validator()
+        v.wallet = SimpleNamespace(hotkey=SimpleNamespace(ss58_address="5Val"))
+        v.keypair = SimpleNamespace(sign=lambda data: SimpleNamespace(hex=lambda: "aa"))
+        event = CommitmentEvent(
+            actor_evm_addr="0xreq",
+            data_cid="ehr/x/payload.bin",
+            hippius_status="SUCCESS",
+            op_type_hint="AUDIT",
+            resource_id="0x" + "cc" * 32,
+            tx_id="0xdead-3",
+            evm_tx_hash="0xdead",
+            log_index=3,
+        )
+        receipt, _ = v.build_receipt(event)
+        self.assertEqual(receipt["op_type"], "AUDIT")
+        self.assertEqual(receipt["tx_id"], "0xdead-3")
+        self.assertEqual(receipt["evm_tx_hash"], "0xdead")
+        self.assertEqual(receipt["log_index"], 3)
 
 
 class TestMaybeSetWeightsRateLimit(unittest.TestCase):

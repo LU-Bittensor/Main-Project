@@ -159,7 +159,7 @@ evm:
   mock_events: false
 ```
 
-Loop (see also `[../subnet-template/access-registry-wiring.md](../subnet-template/access-registry-wiring.md)`):
+Loop (see also [`../../subnet-template/markdowns/ARCHITECTURE.md`](../../subnet-template/markdowns/ARCHITECTURE.md)):
 
 1. Owner/user txs call `registerResource` / `grantAccess` / … on the contract.
 2. `validatorv1` polls logs (`ResourceRegistered`, `AccessGranted`, …).
@@ -215,7 +215,7 @@ deploy, means you never see live logs.
 - [ ] Validator `access_registry` set; `mock_events: false`
 - [ ] Optional: associate EVM key on netuid 573
 
-Related files: `[README.md](README.md)`, `[AccessRegistry.sol](AccessRegistry.sol)`,
-`[deploy_access_registry.py](deploy_access_registry.py)`,
-`[../Contract_Logic.md](../Contract_Logic.md)`,
-`[../subnet-template/testnet-setup.md](../subnet-template/testnet-setup.md)`.
+Related files: [`../README.md`](../README.md), [`../AccessRegistry.sol`](../AccessRegistry.sol),
+[`../deploy_access_registry.py`](../deploy_access_registry.py),
+[`../../Contract_Logic.md`](../../Contract_Logic.md),
+[`../../subnet-template/markdowns/OPERATOR_GUIDE.md`](../../subnet-template/markdowns/OPERATOR_GUIDE.md).

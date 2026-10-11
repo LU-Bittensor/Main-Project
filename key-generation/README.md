@@ -11,9 +11,9 @@ Deploy one multi-grantee `AccessRegistry` to Subtensor EVM (or Hardhat), store c
 | [`access_registry_client.py`](access_registry_client.py) | X25519 DH + register / grant / challenge / verify |
 | [`ehr_hippius.py`](ehr_hippius.py) | Envelope encrypt, per-user wraps, store/unlock demo |
 | [`.env.example`](.env.example) | Env vars template (copy secrets locally; do not commit) |
-| [`Subtensor_EVM_Deploy.md`](Subtensor_EVM_Deploy.md) | Concepts: SS58 TAO → EVM fund → deploy on chain 945 |
+| [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md) | Concepts: SS58 TAO → EVM fund → deploy on chain 945 |
 
-Docs: [`Subtensor_EVM_Deploy.md`](Subtensor_EVM_Deploy.md), [`../Hippius_EHR_Storage.md`](../Hippius_EHR_Storage.md), [`../Contract_Logic.md`](../Contract_Logic.md), [`../subnet-template/access-registry-wiring.md`](../subnet-template/access-registry-wiring.md)
+Docs: [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md), [`../Hippius_EHR_Storage.md`](../Hippius_EHR_Storage.md), [`../Contract_Logic.md`](../Contract_Logic.md), [`../subnet-template/markdowns/ARCHITECTURE.md`](../subnet-template/markdowns/ARCHITECTURE.md), [`../subnet-template/markdowns/OPERATOR_GUIDE.md`](../subnet-template/markdowns/OPERATOR_GUIDE.md)
 
 ## 1. Install deps
 

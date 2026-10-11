@@ -78,6 +78,8 @@ def make_validator() -> ValidatorV1:
     v.last_weight_block = 0
     v.merkle_tree_cache = {}
     v.receipt_cache = {}
+    v.resource_cache = {}
+    v.seen_log_keys = set()
     v.my_uid = 0
     v.wallet = SimpleNamespace(hotkey=SimpleNamespace(ss58_address="5TestValidatorHotkey"))
     v.keypair = SimpleNamespace(sign=lambda data: _Sig(b"val-sig-" + data[:8]))
@@ -208,6 +210,60 @@ class TestIncentiveSmoke(unittest.TestCase):
         expected = (EMA_ALPHA * raw2) + ((1.0 - EMA_ALPHA) * prev)
         self.assertAlmostEqual(validator.score_ema[uid], expected)
         self.assertLess(validator.score_ema[uid], raw)
+
+    def test_audit_receipt_from_access_granted_pins_and_scores(self):
+        """AccessGranted → AUDIT receipt uses resource cache data_cid and stable tx_id."""
+        miner = make_miner()
+        validator = make_validator()
+        validator.keypair = SimpleNamespace(sign=lambda data: _Sig(b"val-sig-" + data[:8]))
+        actor = "0xAuditActor"
+        resource_id = "0x" + "ab" * 32
+        hippius_cid = "ehr/demo/patient/record/v1/payload.bin"
+        validator._cache_resource(resource_id, hippius_cid, data_hash="0x" + "cd" * 32, owner=actor)
+
+        event_tx = "0x" + "11" * 32
+        event = __import__("validatorv1", fromlist=["CommitmentEvent"]).CommitmentEvent(
+            actor_evm_addr=actor,
+            data_cid=validator._lookup_resource_data_cid(resource_id, "0x" + "cd" * 32),
+            hippius_status="SUCCESS",
+            op_type_hint="AUDIT",
+            resource_id=resource_id,
+            tx_id=f"{event_tx}-0",
+            evm_tx_hash=event_tx,
+            log_index=0,
+        )
+        self.assertEqual(event.data_cid, hippius_cid)
+
+        receipt, receipt_cid = validator.build_receipt(event)
+        self.assertEqual(receipt["op_type"], "AUDIT")
+        self.assertEqual(receipt["data_cid"], hippius_cid)
+        self.assertEqual(receipt["tx_id"], f"{event_tx}-0")
+        self.assertEqual(receipt["resource_id"], resource_id)
+
+        out = miner.handle_receipt(MessageSynapse(payload=dict(receipt)))
+        self.assertTrue(out.payload.get("miner_cid"))
+        row = miner.db.execute(
+            "SELECT op_type FROM receipts WHERE receipt_cid = ?", (receipt_cid,)
+        ).fetchone()
+        self.assertEqual(row["op_type"], "AUDIT")
+
+        envelope, batch_cid = close_batch(validator)
+        miner.handle_batch_envelope(MessageSynapse(payload=dict(envelope)))
+        self.assertIn(receipt_cid, envelope["receipt_cids"])
+
+        pin_resp = miner.handle_pin_challenge(
+            MessageSynapse(payload={"receipt_cid": receipt_cid, "nonce": "aa", "issued_at_ns": 1})
+        )
+        proof_resp = miner.handle_merkle_proof_challenge(
+            MessageSynapse(
+                payload={"batch_cid": batch_cid, "target_receipt_cid": receipt_cid, "nonce": "bb"}
+            )
+        )
+        index_resp = miner.handle_index_query(MessageSynapse(payload={"actor_evm_addr": actor}))
+        raw = validator.score_miner(
+            actor, receipt_cid, batch_cid, pin_resp, proof_resp, index_resp, elapsed_ms=20.0
+        )
+        self.assertGreaterEqual(raw, 0.99)
 
 
 if __name__ == "__main__":

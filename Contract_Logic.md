@@ -10,7 +10,8 @@ Related code:
 - [`key-generation/ehr_hippius.py`](key-generation/ehr_hippius.py)
 - [`Hippius_EHR_Storage.md`](Hippius_EHR_Storage.md)
 - [`subnet-template/validatorv1.py`](subnet-template/validatorv1.py)
-- [`subnet-template/access-registry-wiring.md`](subnet-template/access-registry-wiring.md)
+- [`subnet-template/markdowns/ARCHITECTURE.md`](subnet-template/markdowns/ARCHITECTURE.md)
+- [`subnet-template/markdowns/OPERATOR_GUIDE.md`](subnet-template/markdowns/OPERATOR_GUIDE.md)
 
 ---
 

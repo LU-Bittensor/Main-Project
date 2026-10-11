@@ -373,7 +373,6 @@ class MinerV1:
             return False
 
     def handle_receipt(self, synapse: MessageSynapse) -> MessageSynapse:
-        print("in handle_receipt")
         receipt = self._payload(synapse)
         if not self._verify_validator_sig(receipt, VALIDATOR_SIGN_FIELDS):
             return synapse
@@ -388,6 +387,14 @@ class MinerV1:
         ]:
             if not receipt.get(required):
                 return synapse
+        log.info(
+            "handle_receipt op_type=%s tx_id=%s actor=%s data_cid=%s resource_id=%s",
+            receipt.get("op_type"),
+            receipt.get("tx_id"),
+            receipt.get("actor_evm_addr"),
+            receipt.get("data_cid"),
+            receipt.get("resource_id"),
+        )
         if receipt["hippius_status"] == "FAIL":
             self.db.execute(
                 "INSERT OR REPLACE INTO fail_log VALUES (?, ?, ?, ?, ?, ?)",

@@ -193,6 +193,10 @@ class CommitmentEvent:
     hippius_status: str
     op_type_hint: Optional[str] = None  # AUDIT | WRITE | UPDATE | None → derive
     resource_id: Optional[str] = None
+    # Stable id from EVM log: "{txHash}-{logIndex}" (mock events keep a UUID).
+    tx_id: Optional[str] = None
+    evm_tx_hash: Optional[str] = None
+    log_index: Optional[int] = None
 
 
 class _MetagraphView:
@@ -355,6 +359,10 @@ class ValidatorV1:
         self.merkle_tree_cache: Dict[str, MerkleTree] = {}
         self.batch_receipt_cids: Dict[str, List[str]] = {}
         self.receipt_cache: Dict[str, Dict[str, Any]] = {}
+        # resourceId hex → {data_cid, data_hash, owner} from ResourceRegistered (+ eth_call fallback).
+        self.resource_cache: Dict[str, Dict[str, Any]] = {}
+        # Dedup AccessGranted / ResourceRegistered across reorg re-reads.
+        self.seen_log_keys: set = set()
         self.last_evm_block: int = max(0, int(getattr(self.config, "evm_start_block", 0)) - 1)
         self._w3 = None
         self._registry = None
@@ -598,9 +606,64 @@ class ValidatorV1:
                     data_cid=compute_cid({"seed": str(time.time_ns())}),
                     hippius_status="SUCCESS",
                     op_type_hint=None,
+                    tx_id=str(uuid.uuid4()),
                 )
             ]
         return self._poll_access_registry_logs()
+
+    @staticmethod
+    def _log_key(entry: Dict[str, Any]) -> Optional[str]:
+        tx = entry.get("transactionHash")
+        if tx is None:
+            return None
+        if hasattr(tx, "hex"):
+            tx_hex = tx.hex()
+        else:
+            tx_hex = str(tx)
+        if not tx_hex.startswith("0x"):
+            tx_hex = "0x" + tx_hex
+        idx = entry.get("logIndex")
+        if idx is None:
+            return None
+        return f"{tx_hex.lower()}-{int(idx)}"
+
+    def _cache_resource(
+        self,
+        resource_id: str,
+        data_cid: str,
+        data_hash: Any = None,
+        owner: Optional[str] = None,
+    ) -> None:
+        rid = resource_id.lower() if resource_id.startswith("0x") else resource_id
+        entry = self.resource_cache.get(rid, {})
+        entry["data_cid"] = data_cid
+        if data_hash is not None:
+            entry["data_hash"] = (
+                Web3.to_hex(data_hash) if not isinstance(data_hash, str) else data_hash
+            )
+        if owner:
+            entry["owner"] = owner
+        self.resource_cache[rid] = entry
+
+    def _lookup_resource_data_cid(self, resource_id: str, data_hash: Any) -> str:
+        """Prefer ResourceRegistered cache / eth_call; fall back to hash-derived CID."""
+        rid = resource_id if resource_id.startswith("0x") else Web3.to_hex(resource_id)
+        rid_key = rid.lower()
+        cached = self.resource_cache.get(rid_key)
+        if cached and cached.get("data_cid"):
+            return cached["data_cid"]
+
+        if self._registry is not None:
+            try:
+                rid_bytes = bytes.fromhex(rid[2:]) if rid.startswith("0x") else resource_id
+                owner, on_hash, on_cid, exists = self._registry.functions.resources(rid_bytes).call()
+                if exists and on_cid:
+                    self._cache_resource(rid, on_cid, on_hash, owner)
+                    return on_cid
+            except Exception as exc:
+                log.debug("resources(%s) eth_call failed: %s", rid, exc)
+
+        return self._cid_from_data_hash(data_hash)
 
     def _fetch_registry_event_logs(self, from_block: int, to_block: int):
         """Fetch and decode registry logs; compatible with web3 v6/v7 get_logs APIs."""
@@ -670,52 +733,93 @@ class ValidatorV1:
             return []
 
         max_block = self.last_evm_block
-        for log in registered:
-            max_block = max(max_block, int(log["blockNumber"]))
-            args = log["args"]
+        for entry in registered:
+            max_block = max(max_block, int(entry["blockNumber"]))
+            key = self._log_key(entry)
+            if key and key in self.seen_log_keys:
+                continue
+            if key:
+                self.seen_log_keys.add(key)
+            args = entry["args"]
             actor = self.resolve_evm_actor(args["owner"])
             if not actor:
                 continue
+            resource_id = Web3.to_hex(args["resourceId"])
             data_cid = args.get("dataCid") or self._cid_from_data_hash(args["dataHash"])
+            self._cache_resource(resource_id, data_cid, args["dataHash"], args["owner"])
             events.append(
                 CommitmentEvent(
                     actor_evm_addr=actor,
                     data_cid=data_cid,
                     hippius_status="SUCCESS",
                     op_type_hint=None,
-                    resource_id=Web3.to_hex(args["resourceId"]),
+                    resource_id=resource_id,
+                    tx_id=key,
+                    evm_tx_hash=key.split("-")[0] if key else None,
+                    log_index=int(entry["logIndex"]) if entry.get("logIndex") is not None else None,
                 )
             )
 
-        for log in granted:
-            max_block = max(max_block, int(log["blockNumber"]))
-            args = log["args"]
+        for entry in granted:
+            max_block = max(max_block, int(entry["blockNumber"]))
+            key = self._log_key(entry)
+            if key and key in self.seen_log_keys:
+                continue
+            if key:
+                self.seen_log_keys.add(key)
+            args = entry["args"]
             actor = self.resolve_evm_actor(args["requester"])
             if not actor:
                 continue
+            resource_id = Web3.to_hex(args["resourceId"])
+            data_cid = self._lookup_resource_data_cid(resource_id, args["dataHash"])
             events.append(
                 CommitmentEvent(
                     actor_evm_addr=actor,
-                    data_cid=self._cid_from_data_hash(args["dataHash"]),
+                    data_cid=data_cid,
                     hippius_status="SUCCESS",
                     op_type_hint="AUDIT",
-                    resource_id=Web3.to_hex(args["resourceId"]),
+                    resource_id=resource_id,
+                    tx_id=key,
+                    evm_tx_hash=key.split("-")[0] if key else None,
+                    log_index=int(entry["logIndex"]) if entry.get("logIndex") is not None else None,
                 )
             )
+            log.info(
+                "AccessGranted → AUDIT candidate resource_id=%s actor=%s data_cid=%s tx=%s",
+                resource_id,
+                actor,
+                data_cid,
+                key,
+            )
 
-        for log in denied:
-            max_block = max(max_block, int(log["blockNumber"]))
-            args = log["args"]
+        for entry in denied:
+            max_block = max(max_block, int(entry["blockNumber"]))
+            key = self._log_key(entry)
+            if key and key in self.seen_log_keys:
+                continue
+            if key:
+                self.seen_log_keys.add(key)
+            args = entry["args"]
             actor = self.resolve_evm_actor(args["requester"])
             if not actor:
                 continue
+            resource_id = Web3.to_hex(args["resourceId"])
+            cached = self.resource_cache.get(resource_id.lower())
+            if cached and cached.get("data_cid"):
+                data_cid = cached["data_cid"]
+            else:
+                data_cid = self._lookup_resource_data_cid(resource_id, b"\x00" * 32)
             events.append(
                 CommitmentEvent(
                     actor_evm_addr=actor,
-                    data_cid=self._cid_from_data_hash(args["resourceId"]),
+                    data_cid=data_cid,
                     hippius_status="FAIL",
                     op_type_hint="AUDIT",
-                    resource_id=Web3.to_hex(args["resourceId"]),
+                    resource_id=resource_id,
+                    tx_id=key,
+                    evm_tx_hash=key.split("-")[0] if key else None,
+                    log_index=int(entry.get("logIndex")) if entry.get("logIndex") is not None else None,
                 )
             )
 
@@ -737,9 +841,10 @@ class ValidatorV1:
 
     def build_receipt(self, event: CommitmentEvent) -> Tuple[Dict[str, Any], str]:
         actor_state = self.actor_tips.get(event.actor_evm_addr, {})
+        tx_id = event.tx_id or str(uuid.uuid4())
         receipt = {
             "spec_version": RECEIPT_SPEC_VERSION,
-            "tx_id": str(uuid.uuid4()),
+            "tx_id": tx_id,
             "timestamp_ns": time.time_ns(),
             "actor_evm_addr": event.actor_evm_addr,
             "op_type": self.derive_op_type(event.actor_evm_addr, event.data_cid, event.op_type_hint),
@@ -750,9 +855,12 @@ class ValidatorV1:
         }
         if event.resource_id:
             receipt["resource_id"] = event.resource_id
+        if event.evm_tx_hash:
+            receipt["evm_tx_hash"] = event.evm_tx_hash
+        if event.log_index is not None:
+            receipt["log_index"] = event.log_index
         signed_payload = {k: receipt[k] for k in VALIDATOR_SIGN_FIELDS}
         receipt["validator_sig"] = self._sign(canonical_bytes(signed_payload))
-        print(receipt)
         receipt_cid = compute_cid(receipt)
         self.receipt_cache[receipt_cid] = receipt
         self.actor_tips[event.actor_evm_addr] = {
@@ -761,6 +869,13 @@ class ValidatorV1:
             "receipt_count": actor_state.get("receipt_count", 0) + 1,
         }
         self.batch_pending.append(receipt_cid)
+        log.info(
+            "built receipt op_type=%s receipt_cid=%s actor=%s resource_id=%s",
+            receipt["op_type"],
+            receipt_cid,
+            event.actor_evm_addr,
+            event.resource_id,
+        )
         return receipt, receipt_cid
 
     def broadcast_receipt(self, receipt: Dict[str, Any]) -> None:
@@ -795,9 +910,10 @@ class ValidatorV1:
         self.window_open_ns = time.time_ns()
         self.dendrite.query(axons=self.metagraph.axons, synapse=self._msg(envelope), timeout=CHALLENGE_TIMEOUT_S)
         log.info(
-            "closed batch_cid=%s leaves=%s (challenges will target a leaf from this set)",
+            "closed batch_cid=%s leaves=%s audit_leaves=%s (challenges will target a leaf from this set)",
             batch_cid,
             len(cids),
+            sum(1 for c in cids if (self.receipt_cache.get(c) or {}).get("op_type") == "AUDIT"),
         )
         return envelope, batch_cid
 
@@ -1235,14 +1351,31 @@ class ValidatorV1:
 
     def run(self):
         while True:
-            print("Running validator")
+            log.info(
+                "validator tick mock_events=%s last_evm_block=%s pending=%s tip_batch=%s",
+                self.config.mock_events,
+                self.last_evm_block,
+                len(self.batch_pending),
+                self.batch_tips["global"].get("tip_batch_cid"),
+            )
             events = self.poll_evm_commitments()
-            print(events)
+            if events:
+                log.info("polled %s commitment event(s)", len(events))
             for event in events:
-                receipt, _ = self.build_receipt(event)
+                receipt, receipt_cid = self.build_receipt(event)
                 self.broadcast_receipt(receipt)
+                if receipt.get("op_type") == "AUDIT":
+                    log.info(
+                        "AUDIT receipt broadcast receipt_cid=%s tx_id=%s resource_id=%s",
+                        receipt_cid,
+                        receipt.get("tx_id"),
+                        receipt.get("resource_id"),
+                    )
             if (time.time_ns() - self.window_open_ns) >= BATCH_WINDOW_NS or len(self.batch_pending) >= MAX_BATCH_SIZE:
-                self.close_batch()
+                closed = self.close_batch()
+                if closed:
+                    _, batch_cid = closed
+                    log.info("batch closed after AccessGranted/WRITE window batch_cid=%s", batch_cid)
             self.run_challenge_round()
             self.maybe_set_weights()
             time.sleep(12)
