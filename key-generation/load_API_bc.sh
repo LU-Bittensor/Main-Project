@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-export SUPABASE_URL=https://cwyxwmzquatqlbufsdob.supabase.co
-export SUPABASE_PUBLISHABLE_KEY='sb_publishable_7NtcuZPUT618En1FAYVAVA_K0mBwNW9'
+# Server-only keys may be kept in this untracked file. Never use a VITE_ prefix.
+if [ -f .env ]; then
+  set -a
+  source .env
+  set +a
+fi
+export SUPABASE_URL="${SUPABASE_URL:-https://cwyxwmzquatqlbufsdob.supabase.co}"
+export SUPABASE_PUBLISHABLE_KEY="${SUPABASE_PUBLISHABLE_KEY:-sb_publishable_7NtcuZPUT618En1FAYVAVA_K0mBwNW9}"
 export GRANT_DATA_DIR="$PWD/.grant-supabase-local"
 # Generate once and retain this key across API restarts.
 (umask 077; mkdir -p "$GRANT_DATA_DIR"; if [ ! -f "$GRANT_DATA_DIR/master.key" ]; then

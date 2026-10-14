@@ -278,6 +278,7 @@ def test_supabase_auth_is_verified_and_ownership_filtered(tmp_path, monkeypatch)
     from types import SimpleNamespace
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
     uid = "00000000-0000-0000-0000-000000000001"
     def get(url, **kwargs):
         if url.endswith("/auth/v1/user"):
@@ -289,6 +290,7 @@ def test_supabase_auth_is_verified_and_ownership_filtered(tmp_path, monkeypatch)
             assert kwargs["params"]["owner_id"] == "eq." + uid
         return SimpleNamespace(status_code=200, raise_for_status=lambda: None, json=lambda: body)
     monkeypatch.setattr(grant_api.requests, "get", get)
+    monkeypatch.setattr(grant_api.requests, "request", lambda method, url, **kwargs: get(url, **kwargs))
     client = create_app(data_dir=tmp_path, master_key=b"k" * 32).test_client()
     assert client.get("/api/records", headers={"Authorization": "Bearer invalid"}).status_code == 401
     assert client.post("/api/enroll", headers={"Authorization": "Bearer valid"}).get_json()["id"] == uid

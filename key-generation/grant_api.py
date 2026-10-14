@@ -11,7 +11,8 @@ import uuid
 
 import requests
 from eth_account import Account
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, request, Response
+from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 
 from DHkey_share import create_access_grant, decrypt_secret, derive_shared_secret, encrypt_secret, generate_key_pair
@@ -114,6 +115,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         db().execute("INSERT OR IGNORE INTO settings VALUES ('key_check', ?)", (check,))
         db().commit()
     db_path.chmod(0o600)
+    documents = DemoDocumentStore() if dev else SupabaseDocumentStore(
+        supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+
 
     def enroll(uid, name):
         with lock:
@@ -135,6 +139,10 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     def api_error(error):
         return jsonify(error=error.message), error.status
 
+    @app.errorhandler(DocumentStorageError)
+    def document_error(error):
+        return jsonify(error=str(error)), 503
+
     @app.errorhandler(HTTPException)
     def http_error(error):
         return jsonify(error=error.description), error.code
@@ -147,6 +155,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     @app.before_request
     def authenticate():
+        if request.path == "/api/records" and request.method == "POST":
+            request.max_content_length = MAX_DOCUMENT_BYTES + 64 * 1024
         origin = request.headers.get("Origin")
         if origin and origin not in allowed_origins:
             raise APIError("Origin not allowed", 403)
@@ -195,12 +205,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     def owner_records():
         if dev:
-            return DEMO_RECORDS if g.uid == "patient" else []
-        result = requests.get(supabase_url + "/rest/v1/records", headers={
-            "apikey": supabase_key, "Authorization": "Bearer " + g.token},
-            params={"owner_id": "eq." + g.uid, "select": "id,name,kind"}, timeout=10)
-        result.raise_for_status()
-        return result.json()
+            return (DEMO_RECORDS if g.uid == "patient" else []) + documents.owned(g.uid)
+        return documents.owned(g.uid)
 
     def serialize(row):
         item = {key: row[key] for key in ("id", "owner_id", "recipient_id", "scope", "status", "tx_hash", "error",
@@ -210,6 +216,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         item["registry_revoked"] = bool(row["registry_revoked"])
         item["record_ids"] = json.loads(row["records"])
         item["chain_enabled"] = chain is not None
+        item["document"] = documents.get(item["record_ids"][0]) if len(item["record_ids"]) == 1 else None
         for field in ("owner", "recipient"):
             item[field + "_name"] = db().execute("SELECT name FROM users WHERE id=?", (row[field + "_id"],)).fetchone()[0]
         return item
@@ -383,6 +390,61 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     @app.get("/api/records")
     def records():
         return jsonify(owner_records())
+
+    @app.post("/api/records")
+    def upload_document():
+        if dev:
+            patient = g.uid == "patient"
+        else:
+            result = requests.get(supabase_url + "/rest/v1/user_roles", headers={
+                "apikey": supabase_key, "Authorization": "Bearer " + g.token},
+                params={"user_id": "eq." + g.uid, "role": "eq.patient", "select": "role"}, timeout=10)
+            result.raise_for_status()
+            patient = any(row.get("role") == "patient" for row in result.json())
+        if not patient:
+            raise APIError("Only patients can upload documents", 403)
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            raise APIError("Choose a document to upload")
+        name = upload.filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not name or len(name) > 200 or any(ord(c) < 32 for c in name):
+            raise APIError("Use a filename of 1–200 characters without control characters")
+        raw_tags = request.form.get("tags", "")
+        if len(raw_tags) > 1000:
+            raise APIError("Tags are too long")
+        tags = list(dict.fromkeys(tag.strip() for tag in raw_tags.split(",") if tag.strip()))
+        if len(tags) > 20 or any(len(tag) > 50 for tag in tags):
+            raise APIError("Use at most 20 tags, each up to 50 characters")
+        content = upload.read(MAX_DOCUMENT_BYTES + 1)
+        if not content:
+            raise APIError("The document is empty")
+        if len(content) > MAX_DOCUMENT_BYTES:
+            raise APIError("Documents must be 10 MB or smaller", 413)
+        try:
+            mime = document_type(name, content)
+        except ValueError as error:
+            raise APIError(str(error)) from error
+        return jsonify(documents.add(g.uid, name, tags, mime, content)), 201
+
+    @app.post("/api/records/<record_id>/document")
+    def view_document(record_id):
+        # Every delivery is authenticated. Never hand out a public or reusable storage URL.
+        with lock:
+            document = documents.get(record_id)
+            if document is None or not document["has_document"]:
+                raise APIError("No uploaded document is available for this record", 404)
+            if document["owner_id"] != g.uid:
+                rows = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND status='active'",
+                                    (document["owner_id"], g.uid)).fetchall()
+                permitted = next((row for row in rows if record_id in json.loads(row["records"])), None)
+                if permitted is None:
+                    raise APIError("Document not found or access denied", 403)
+                # Reuse DH verification and live registry checks, including revocation.
+                access(permitted["id"])
+            response = Response(documents.read(record_id, document["owner_id"]), mimetype=document["mime_type"])
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+            return response
 
     @app.get("/api/grants")
     def grants():

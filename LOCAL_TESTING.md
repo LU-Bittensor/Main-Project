@@ -42,12 +42,12 @@ The new SQLite filename leaves old `pair-grants.sqlite3` data and old contracts 
 
 Each recipient still has a separate custodial wallet and each grant has a fresh DH-derived credential. Each record has a stable resource ID derived from project, owner ID, and record ID. Sharing with another recipient or re-sharing after revocation reuses that resource ID and registry address. The API operator registers resources and signs grant/revoke transactions; the recipient wallet signs challenge/verification transactions.
 
-The current records API exposes metadata only. `dataCid` is explicitly `medilink:record:<resource-id>` and `dataHash` is SHA-256 of that reference. It is NOT a medical file content hash or Hippius CID. Actual file storage remains separate work.
+The records API reads Supabase `public.records`, including uploaded document bytes stored in `file_content`. Registry `dataCid` remains `medilink:record:<resource-id>` and `dataHash` is SHA-256 of that reference, not a file-content hash or Hippius CID. The registry controls sharing; file delivery is authorized by the API.
 
 ## Browser sharing test
 
 1. Register/sign in as the recipient and open Records to enroll with the API. Sign out and sign in as the owner (or use a separate browser profile).
-2. Add test metadata in Supabase Table Editor → `records`: patient's UUID as `owner_id`, a `name`, and `kind` such as `Lab report`. Leave default columns unchanged. Demo fixtures already provide lab and imaging records.
+2. As a patient, open **Records → Upload document**, select a PDF, PNG, JPEG, or UTF-8 text file (up to 10 MB), optionally enter comma-separated tags, and upload. The new record appears with a clickable filename and tags. Existing Supabase metadata and demo fixtures remain visible but cannot open a document unless they have an uploaded file.
 3. Open **Access ledger**, select recipient and records, and click **Grant**. All active receipts should show the SAME registry address, with different resource IDs for different records. Sharing the same record with another recipient keeps that resource ID but has a different recipient wallet.
 4. As recipient, click **Check access**. Expect `AccessGranted` and a verification transaction. Repeat: each access check sends a new challenge and verification to the same registry.
 5. As owner, **Revoke** one receipt. It moves to Revoked. Expect a revocation transaction and “Recipient grant removed from registry.” The registry itself stays active. Other records/recipients must still pass checks.
@@ -70,7 +70,7 @@ For Supabase, set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and a persistent 3
 
 For API/DH testing without any blockchain, omit `--chain` and use a separate data directory. Off-chain mode cannot verify or revoke on-chain permissions.
 
-The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VITE_GRANT_DEMO=false` for real users. `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. Use port 5173 with `--strictPort`, or configure API `FRONTEND_ORIGINS` explicitly. Environment files are not automatically loaded by Python.
+The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VITE_GRANT_DEMO=false` for real users. `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. Use port 5173 with `--strictPort`, or configure API `FRONTEND_ORIGINS` explicitly. Environment files are not automatically loaded by Python. The real-account launcher explicitly loads `key-generation/.env`.
 
 **Local demo account error:** the frontend has a Supabase session but the API uses `--dev`. Use matching modes, not extra records. Empty record lists show “No records yet.”
 
@@ -79,7 +79,7 @@ The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VI
 From `key-generation`:
 
 ```sh
-.venv/bin/python -m pytest tests/test_grant_api.py -q
+.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py -q
 ```
 
 For the integration test, start a separate compiled Hardhat node on port 18545, then run:
@@ -94,7 +94,9 @@ From `frontend`, run `npx tsc --noEmit`, lint the changed components, and `npm r
 
 ## Patient account registration
 
-The existing **Create Patient Account** form sends full name, email, and password to Supabase Auth. The new signup trigger creates `public.patients` in the same transaction, including when email confirmation is required. No separate browser insert is needed.
+Start `bash Main-Project/frontend/load_frontend.sh` from the repository root (or `bash load_frontend.sh` from the frontend directory). This launcher explicitly enables real-account mode. Visit `/signin` and choose **Need an account? Create one**. Both patient and care-provider accounts persist in Supabase Auth, with matching `profiles` and `user_roles` rows; patient accounts also populate `patients`. Account creation and subsequent login do not require Hardhat or the Python grant API to be running. The Python SQLite database stores grant identities and wallets when accounts use the grant API; it is not the password/account database.
+
+The **Create Patient Account** form sends full name, email, and password to Supabase Auth. The new signup trigger creates `public.patients` in the same transaction, including when email confirmation is required. No separate browser insert is needed.
 
 The table contains `id` (Auth's generated UUID, also used by records/grants), plaintext `name` and `email`, and `created_at` (database timestamp). Supabase Auth stores the salted bcrypt password hash in protected authentication storage, not in `patients`. Password resets continue through Auth. Patients can read only their own row; direct client inserts/updates are denied. Profile name and confirmed Auth email changes synchronize to the patient row.
 
@@ -130,3 +132,59 @@ Use the same project for the Python API's `SUPABASE_URL` and `SUPABASE_PUBLISHAB
 2. Submit and confirm your email if prompted. In SQL Editor, run `select id, name, email, created_at from public.patients order by created_at desc;`. The ID should match **Authentication → Users**.
 3. Sign out and sign back in. Creating a care provider should not create a patient row.
 4. On local/staging Supabase, run `frontend/supabase/tests/patients.sql` to test signup, provider exclusion, updates, row isolation, and deletion. It rolls back its fixtures. Browser testing is still needed to verify password authentication.
+
+### Account persistence verification (October 13, 2026)
+
+Verified the effective local frontend configuration against project `cwyxwmzquatqlbufsdob`: email signup is enabled, and email confirmation is currently disabled. A signup through the same Supabase client used by the frontend created matching Auth, profile, role, and patient rows. Signing out and signing in through a new client returned the same user UUID. No schema changes were needed on this project. The labeled test account `medilink-test-1791914846157@example.com` remains in the database and can be removed through Authentication → Users. Its randomly generated password was not retained. This verifies the backend authentication flow, not a browser interaction test.
+
+Vite's `.env.local` overrides the older project values in `.env`. Keep the frontend and Python API pointed at the same project. Do not change `supabase/config.toml` or deploy migrations to a different project merely to resolve a login error. If account-role loading fails, sign-in now displays the database problem instead of silently treating the account as a patient.
+
+## Document upload and preview — Supabase records
+
+Uploads now store the **actual file bytes in `public.records.file_content`** (`bytea`), with `file_mime_type`, `file_size`, and the existing `name`, `owner_id`, `tags`, and timestamps on that same row. No Storage bucket or local document database is used for real accounts. Record listings select metadata only; file bytes are fetched when an authorized user opens the preview.
+
+### Required setup
+
+1. In the SQL Editor for the same Supabase project used by the frontend/API, apply `frontend/supabase/migrations/20261013190000_record_documents.sql` once, after the existing migrations. It adds the file columns and constraints and limits direct client writes to metadata. Existing records remain intact.
+2. Copy `key-generation/.env.example` to `key-generation/.env`. Set `SUPABASE_SECRET_KEY` to a server secret key from that project, or use the legacy `SUPABASE_SERVICE_ROLE_KEY` instead. Do not put either secret in the frontend, a `VITE_` variable, source control, or chat. The API needs this key to fetch a shared record after validating its grant; the recipient's own Supabase token cannot bypass the owner-only records policy.
+3. Restart `bash load_API_bc.sh` from `key-generation`, then start the frontend normally. The launcher reads the backend `.env`; direct Python starts must have those variables exported. Preserve `GRANT_MASTER_KEY` and the grant database for existing shares.
+
+Missing schema or server credentials return a configuration error. There is no automatic local-file fallback. Authenticated owners retain direct read access to their own records under RLS. Shared recipients receive bytes only through the grant API, which checks ownership or the exact active grant and runs DH/on-chain access verification as configured. Revocation blocks future delivery, not copies already delivered.
+
+### Use
+
+As a patient, open **Records → Upload document**, select a PDF, PNG, JPEG, or UTF-8 text file up to 10 MB, and optionally add comma-separated tags (up to 20, each at most 50 characters). The saved filename opens a preview popup. Share through **Access ledger**; the recipient can then open it from their shared records. Providers can view shared files but cannot use this patient upload workflow.
+
+Inspect saved rows in Supabase Table Editor → `records`, or run:
+
+```sql
+select id, owner_id, name, tags, file_mime_type, file_size,
+       octet_length(file_content) as stored_bytes
+from public.records
+order by created_at desc;
+```
+
+The `bytea` value appears as encoded binary in the table editor. Use the application preview to view the document. Metadata-only records have null file columns.
+
+### Copy previous local uploads
+
+Legacy local files are preserved and are not automatically deleted or silently uploaded. To copy them into Supabase while retaining IDs (and therefore existing grants), use `migrate_documents_to_supabase.py`. Stop the old API first. After applying the SQL migration, export the backend `.env` variables and the original `GRANT_MASTER_KEY` in your terminal. For the standard launcher setup, from `key-generation`:
+
+```sh
+set -a
+source .env
+set +a
+export GRANT_MASTER_KEY="$(.venv/bin/python -c 'from pathlib import Path; print(Path(".grant-supabase-local/master.key").read_bytes().hex())')"
+# Replace <project-hash> with the original document database's filename.
+.venv/bin/python migrate_documents_to_supabase.py .grant-supabase-local/documents/<project-hash>.sqlite3
+# Review the pending count, then copy:
+.venv/bin/python migrate_documents_to_supabase.py .grant-supabase-local/documents/<project-hash>.sqlite3 --apply
+```
+
+The tool verifies the original project filename and encryption key, preserves record IDs/owners/tags/timestamps, verifies uploaded bytes, skips identical existing files, and refuses conflicting records. It never deletes the local source. Demo identities cannot be migrated. Remove old copies only after verifying your cloud records and backups.
+
+### Verification boundaries
+
+Automated tests cover the Supabase REST payload/byte decoding, pagination, metadata-only listing, persistence across client/API instances with a simulated remote table, missing-key failures, owner/shared/revoked access, role checks, and repeatable local-file migration. `frontend/supabase/tests/record_documents.sql` exercises constraints, owner-only RLS, and column privileges with rollback fixtures on a local/staging database. The live schema migration and live cloud upload/download verification require the project admin connection and server secret; they have not been run in this workspace yet.
+
+`--dev` remains a synthetic demo: uploaded demo files live only in memory and disappear when its API stops. Use real-account mode for persistent Supabase uploads. Grant/wallet data still uses the existing local SQLite service store; only document storage changed.
