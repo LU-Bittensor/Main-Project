@@ -133,6 +133,38 @@ Use the same project for the Python API's `SUPABASE_URL` and `SUPABASE_PUBLISHAB
 3. Sign out and sign back in. Creating a care provider should not create a patient row.
 4. On local/staging Supabase, run `frontend/supabase/tests/patients.sql` to test signup, provider exclusion, updates, row isolation, and deletion. It rolls back its fixtures. Browser testing is still needed to verify password authentication.
 
+## Client-side Hippius key vault
+
+After Supabase sign-in/sign-up, the frontend creates or unlocks an encrypted keystore. The password is stretched with Argon2id **in the browser**; private EVM and X25519 keys never leave the tab. The grant API only issues vault-scoped upload/download URLs.
+
+**API (same process as grant API):**
+
+```sh
+cd Main-Project/key-generation
+# Optional: real Hippius. If unset, vault blobs are stored under GRANT_DATA_DIR/vault_objects/
+# export HIPPIUS_ACCESS_KEY=...
+# export HIPPIUS_SECRET_KEY=...
+# export HIPPIUS_BUCKET=...
+.venv/bin/python grant_api.py   # or --dev for local demo identities
+```
+
+Endpoints (Bearer Supabase JWT, or `demo-*` in `--dev`):
+
+- `GET /api/vault/status`
+- `POST /api/vault/presign-put`
+- `POST /api/vault/presign-get`
+
+**Frontend:** set `VITE_GRANT_API_URL` (default `http://127.0.0.1:5001`), leave Hippius secrets out of `VITE_*`. Sign up → recovery phrase modal → vault unlocked in memory. Sign out clears the session keys; a refresh requires password unlock again.
+
+**Unit tests:**
+
+```sh
+cd health-locker-guard && npm test
+cd Main-Project/key-generation && pytest tests/test_grant_api.py -k vault
+```
+
+Grant/access signing remains custodial under `GRANT_MASTER_KEY` for now; the vault holds keys for the next non-custodial cutover.
+
 ### Account persistence verification (October 13, 2026)
 
 Verified the effective local frontend configuration against project `cwyxwmzquatqlbufsdob`: email signup is enabled, and email confirmation is currently disabled. A signup through the same Supabase client used by the frontend created matching Auth, profile, role, and patient rows. Signing out and signing in through a new client returned the same user UUID. No schema changes were needed on this project. The labeled test account `medilink-test-1791914846157@example.com` remains in the database and can be removed through Authentication → Users. Its randomly generated password was not retained. This verifies the backend authentication flow, not a browser interaction test.

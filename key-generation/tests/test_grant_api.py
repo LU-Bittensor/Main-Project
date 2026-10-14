@@ -88,6 +88,55 @@ def test_permissions_and_inputs(setup):
     assert client.get("/api/grants", headers=headers(), environ_base={"REMOTE_ADDR": "10.0.0.1"}).status_code == 403
 
 
+def test_vault_presign_acl_and_local_round_trip(setup):
+    client, directory = setup
+    assert client.get("/api/vault/status").status_code == 401
+    status = client.get("/api/vault/status", headers=headers("patient"))
+    assert status.status_code == 200
+    body = status.get_json()
+    assert body["exists"] is False
+    assert body["user_id"] == "patient"
+    assert body["object_key"] == "vaults/patient/keystore.v1.json"
+    assert body["backend"] == "local"
+
+    put = client.post("/api/vault/presign-put", headers=headers("patient"))
+    assert put.status_code == 200
+    put_body = put.get_json()
+    assert put_body["method"] == "PUT"
+    assert put_body["object_key"] == "vaults/patient/keystore.v1.json"
+    assert "token=" in put_body["url"]
+
+    # Another user's JWT cannot obtain a put URL for the patient's path — path is always g.uid.
+    other = client.post("/api/vault/presign-put", headers=headers("clinician")).get_json()
+    assert other["object_key"] == "vaults/clinician/keystore.v1.json"
+    assert other["object_key"] != put_body["object_key"]
+
+    from urllib.parse import urlparse
+
+    payload = json.dumps({"version": 1, "userId": "patient", "cipher": {"ciphertext_b64": "dGVzdA=="}}).encode()
+    parsed = urlparse(put_body["url"])
+    uploaded = client.put(
+        parsed.path + "?" + parsed.query,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    assert uploaded.status_code == 200
+    assert (directory / "vault_objects" / "patient" / "keystore.v1.json").is_file()
+
+    # Token is one-shot; reuse fails.
+    assert client.put(parsed.path + "?" + parsed.query, data=payload).status_code == 401
+
+    assert client.get("/api/vault/status", headers=headers("patient")).get_json()["exists"] is True
+    get = client.post("/api/vault/presign-get", headers=headers("patient")).get_json()
+    get_parsed = urlparse(get["url"])
+    downloaded = client.get(get_parsed.path + "?" + get_parsed.query)
+    assert downloaded.status_code == 200
+    assert downloaded.get_json()["userId"] == "patient"
+
+    # Clinician has no vault of their own yet.
+    assert client.post("/api/vault/presign-get", headers=headers("clinician")).status_code == 404
+
+
 def test_pair_granularity_overlap_and_encrypted_storage(setup):
     client, directory = setup
     first = make_grant(client)

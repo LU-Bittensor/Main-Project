@@ -5,17 +5,34 @@ import hmac
 import json
 import os
 from pathlib import Path
+import secrets
 import sqlite3
+import time
 from threading import RLock
 import uuid
 
 import requests
 from eth_account import Account
-from flask import Flask, g, jsonify, request, Response
+from flask import Flask, Response, g, jsonify, request, Response
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 
-from DHkey_share import create_access_grant, decrypt_secret, derive_shared_secret, encrypt_secret, generate_key_pair
+from DHkey_share import (
+    HIPPIUS_BUCKET,
+    create_access_grant,
+    decrypt_secret,
+    derive_shared_secret,
+    encrypt_secret,
+    generate_key_pair,
+    generate_presigned_put_url,
+    generate_presigned_url,
+    hippius_configured,
+    hippius_object_exists,
+)
+
+VAULT_OBJECT_NAME = "keystore.v1.json"
+VAULT_PRESIGN_TTL_S = 300
+VAULT_MAX_BYTES = 64 * 1024
 
 DEMO_USERS = {"patient": "Demo patient", "clinician": "Demo clinician", "outsider": "Unrelated user"}
 DEMO_RECORDS = [
@@ -29,11 +46,19 @@ class APIError(Exception):
         self.message, self.status = message, status
 
 
+def vault_object_key(user_id: str) -> str:
+    return f"vaults/{user_id}/{VAULT_OBJECT_NAME}"
+
+
 def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+    app.config["MAX_CONTENT_LENGTH"] = VAULT_MAX_BYTES
     directory = Path(data_dir or os.getenv("GRANT_DATA_DIR", Path(__file__).parent / (".grant-pairs-dev" if dev else ".grant-pairs-data")))
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    vault_dir = directory / "vault_objects"
+    vault_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Short-lived tokens for local (non-Hippius) vault PUT/GET when credentials are unset.
+    vault_local_tokens: dict[str, dict] = {}
     directory.chmod(0o700)
     if master_key is None:
         configured = os.getenv("GRANT_MASTER_KEY")
@@ -167,6 +192,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             return "", 204
         if request.path == "/api/health":
             return None
+        # Local vault object uses a short-lived query token (no Bearer).
+        if request.path == "/api/vault/local-object":
+            return None
         header = request.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
             raise APIError("Sign in before managing access", 401)
@@ -199,7 +227,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Vary"] = "Origin"
             response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -542,6 +570,106 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 result.update(verification, chain_verified=True)
             # No file is returned yet; this exercises authorization and the actual contract flow.
             return jsonify(result)
+
+    def local_vault_path(user_id: str) -> Path:
+        path = vault_dir / user_id / VAULT_OBJECT_NAME
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return path
+
+    def purge_expired_vault_tokens():
+        now = time.time()
+        expired = [token for token, meta in vault_local_tokens.items() if meta["exp"] <= now]
+        for token in expired:
+            vault_local_tokens.pop(token, None)
+
+    def issue_local_vault_url(operation: str) -> str:
+        purge_expired_vault_tokens()
+        token = secrets.token_urlsafe(32)
+        vault_local_tokens[token] = {"uid": g.uid, "op": operation, "exp": time.time() + VAULT_PRESIGN_TTL_S}
+        return request.url_root.rstrip("/") + "/api/vault/local-object?token=" + token
+
+    def vault_exists_for(user_id: str) -> bool:
+        if hippius_configured():
+            return hippius_object_exists(HIPPIUS_BUCKET, vault_object_key(user_id))
+        return local_vault_path(user_id).is_file()
+
+    @app.get("/api/vault/status")
+    def vault_status():
+        try:
+            exists = vault_exists_for(g.uid)
+        except RuntimeError:
+            raise APIError("Vault storage is unavailable. Check Hippius configuration.", 503)
+        return jsonify(
+            exists=exists,
+            user_id=g.uid,
+            object_key=vault_object_key(g.uid),
+            backend="hippius" if hippius_configured() else "local",
+        )
+
+    @app.post("/api/vault/presign-put")
+    def vault_presign_put():
+        key = vault_object_key(g.uid)
+        if hippius_configured():
+            try:
+                url = generate_presigned_put_url(HIPPIUS_BUCKET, key, VAULT_PRESIGN_TTL_S)
+            except RuntimeError:
+                raise APIError("Could not create vault upload URL.", 503)
+            return jsonify(url=url, method="PUT", object_key=key, backend="hippius",
+                           headers={"Content-Type": "application/json"})
+        return jsonify(
+            url=issue_local_vault_url("put"),
+            method="PUT",
+            object_key=key,
+            backend="local",
+            headers={"Content-Type": "application/json"},
+        )
+
+    @app.post("/api/vault/presign-get")
+    def vault_presign_get():
+        key = vault_object_key(g.uid)
+        if not vault_exists_for(g.uid):
+            raise APIError("No vault keystore found for this account.", 404)
+        if hippius_configured():
+            try:
+                url = generate_presigned_url(HIPPIUS_BUCKET, key, VAULT_PRESIGN_TTL_S)
+            except RuntimeError:
+                raise APIError("Could not create vault download URL.", 503)
+            return jsonify(url=url, method="GET", object_key=key, backend="hippius", headers={})
+        return jsonify(
+            url=issue_local_vault_url("get"),
+            method="GET",
+            object_key=key,
+            backend="local",
+            headers={},
+        )
+
+    @app.route("/api/vault/local-object", methods=["GET", "PUT"])
+    def vault_local_object():
+        purge_expired_vault_tokens()
+        token = request.args.get("token", "")
+        meta = vault_local_tokens.get(token)
+        if not meta or meta["exp"] <= time.time():
+            raise APIError("Vault URL expired or invalid.", 401)
+        user_id = meta["uid"]
+        path = local_vault_path(user_id)
+        if request.method == "PUT":
+            if meta["op"] != "put":
+                raise APIError("Vault URL is not valid for upload.", 403)
+            body = request.get_data()
+            if not body:
+                raise APIError("Empty vault upload.", 400)
+            if len(body) > VAULT_MAX_BYTES:
+                raise APIError("Vault blob too large.", 413)
+            path.write_bytes(body)
+            path.chmod(0o600)
+            vault_local_tokens.pop(token, None)
+            return jsonify(ok=True), 200
+        if meta["op"] != "get":
+            raise APIError("Vault URL is not valid for download.", 403)
+        if not path.is_file():
+            raise APIError("No vault keystore found for this account.", 404)
+        vault_local_tokens.pop(token, None)
+        return Response(path.read_bytes(), mimetype="application/json")
 
     return app
 

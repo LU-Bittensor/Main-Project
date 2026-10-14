@@ -3,3 +3,4 @@ cryptography>=46,<51
 requests>=2.32,<3
 web3>=7,<9
 pytest>=8,<10
+boto3>=1.35,<2

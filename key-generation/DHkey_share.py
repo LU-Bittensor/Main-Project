@@ -252,6 +252,34 @@ def generate_presigned_url(bucket: str, key: str, expiry: int = 300) -> str:
     except ClientError as e:
         raise RuntimeError(f"Failed to generate Hippius presigned URL: {e}")
 
+
+def generate_presigned_put_url(bucket: str, key: str, expiry: int = 300) -> str:
+    from botocore.exceptions import ClientError
+    try:
+        return get_Hippius_client().generate_presigned_url(
+            "put_object",
+            Params={"Bucket": bucket, "Key": key, "ContentType": "application/json"},
+            ExpiresIn=expiry,
+        )
+    except ClientError as e:
+        raise RuntimeError(f"Failed to generate Hippius presigned PUT URL: {e}")
+
+
+def hippius_configured() -> bool:
+    return bool(HIPPIUS_ACCESS_KEY and HIPPIUS_SECRET_KEY and HIPPIUS_BUCKET)
+
+
+def hippius_object_exists(bucket: str, key: str) -> bool:
+    from botocore.exceptions import ClientError
+    try:
+        get_Hippius_client().head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise RuntimeError(f"Failed to head Hippius object: {exc}") from exc
+
 # Connect to node and return (web3, contract) instances
 def get_contract():
     w3 = Web3(Web3.HTTPProvider(RPC_URL))
