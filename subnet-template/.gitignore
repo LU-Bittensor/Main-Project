@@ -2,3 +2,6 @@ __pycache__/
 venv
 .venv
 .Rhistory
+storage/ehr_records/*.json
+storage/ehr_records/*.tmp
+epic_sandbox.config.yml

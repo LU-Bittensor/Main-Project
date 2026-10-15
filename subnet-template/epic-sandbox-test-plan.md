@@ -97,17 +97,40 @@ Expected result:
 
 ## Prototype Commands
 
-The exact command will depend on the adapter implementation. Until then, use the current CLI and Synapse flow tests to validate downstream behavior:
+Validate the Epic sandbox OAuth configuration:
 
 ```sh
+python3 epic_oauth_config.py --config epic_sandbox.config.yml
+```
+
+Validate an Epic sandbox-style bundle through ingestion, storage, and digest verification:
+
+```sh
+python3 epic_sandbox_validate.py --bundle fixtures/epic/patient_bundle.json --patient-id patient-001 --record-id epic-sandbox-record-001 --storage-root storage/ehr_records --report-output /tmp/epic-sandbox-validation-report.json
+```
+
+Use the Epic fixture adapter to validate the local FHIR-to-Synapse mapping:
+
+```sh
+python3 epic_fhir_ingest.py --patient-id patient-001 --fixture fixtures/epic/patient_bundle.json --output /tmp/normalized_ehr.json
+```
+
+Then run the fixture, adapter, and downstream Synapse tests:
+
+```sh
+python3 -m unittest tests/test_epic_fixtures.py
+python3 -m unittest tests/test_epic_fhir_ingest.py
+python3 -m unittest tests/test_ehr_storage.py
+python3 -m unittest tests/test_epic_sandbox_validate.py
+python3 -m unittest tests/test_epic_oauth_config.py
 python3 -m unittest tests/test_synapse_flow.py
 python3 -m unittest tests/test_hippius_cli.py
 ```
 
-The first future adapter command should follow this shape:
+The local fixture bundle for this prototype lives at:
 
 ```sh
-python epic_fhir_ingest.py --patient-id patient-001 --fixture fixtures/epic_patient_bundle.json --output /tmp/normalized_ehr.json
+fixtures/epic/patient_bundle.json
 ```
 
 ## Acceptance Criteria
@@ -124,6 +147,8 @@ The Epic ingestion prototype is acceptable when:
 
 - Create FHIR fixture files for the minimum resource set.
 - Add an `epic_fhir_ingest.py` adapter.
+- Add an `epic_sandbox_validate.py` validation command for sandbox-style bundles.
+- Add an `epic_oauth_config.py` loader for live sandbox OAuth settings.
 - Add tests for FHIR-to-Synapse mapping.
 - Add a local storage placeholder for encrypted payloads.
 - Add digest generation and verification tests.

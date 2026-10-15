@@ -1,0 +1,35 @@
+{
+  "resourceType": "DocumentReference",
+  "id": "epic-document-reference-001",
+  "status": "current",
+  "type": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "code": "34133-9",
+        "display": "Summary of episode note"
+      }
+    ],
+    "text": "Primary care visit summary"
+  },
+  "subject": {
+    "reference": "Patient/epic-patient-001"
+  },
+  "date": "2026-03-21T10:00:00Z",
+  "content": [
+    {
+      "attachment": {
+        "contentType": "application/pdf",
+        "url": "Binary/epic-document-binary-001",
+        "title": "Primary care visit summary"
+      }
+    }
+  ],
+  "context": {
+    "encounter": [
+      {
+        "reference": "Encounter/epic-encounter-001"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "resourceType": "MedicationRequest",
+  "id": "epic-medication-request-001",
+  "status": "active",
+  "intent": "order",
+  "subject": {
+    "reference": "Patient/epic-patient-001"
+  },
+  "medicationCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+        "code": "29046",
+        "display": "Lisinopril"
+      }
+    ],
+    "text": "Lisinopril"
+  },
+  "authoredOn": "2026-02-14",
+  "requester": {
+    "display": "Campus Health Clinic"
+  }
+}

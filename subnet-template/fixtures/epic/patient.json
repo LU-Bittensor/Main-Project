@@ -1,0 +1,20 @@
+{
+  "resourceType": "Patient",
+  "id": "epic-patient-001",
+  "identifier": [
+    {
+      "system": "urn:synthetic:epic:mrn",
+      "value": "MRN-000001"
+    }
+  ],
+  "name": [
+    {
+      "use": "official",
+      "family": "Alpha",
+      "given": ["Mock", "Patient"]
+    }
+  ],
+  "gender": "female",
+  "birthDate": "1985-04-12",
+  "active": true
+}

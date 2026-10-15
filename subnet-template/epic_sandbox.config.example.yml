@@ -1,0 +1,19 @@
+# Copy this file to epic_sandbox.config.yml and fill in the real Epic
+# non-production client ID from your Epic on FHIR sandbox app.
+
+client_id: your-epic-non-production-client-id
+redirect_uri: http://localhost:8080/callback
+authorization_url: https://fhir.epic.com/interconnect-fhir-oauth/oauth2/authorize
+token_url: https://fhir.epic.com/interconnect-fhir-oauth/oauth2/token
+fhir_base_url: https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4
+scopes:
+  - launch/patient
+  - openid
+  - fhirUser
+  - patient/Patient.read
+  - patient/Condition.read
+  - patient/Observation.read
+  - patient/DiagnosticReport.read
+  - patient/MedicationRequest.read
+  - patient/Encounter.read
+  - patient/DocumentReference.read

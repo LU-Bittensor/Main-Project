@@ -91,3 +91,25 @@ The first prototype should demonstrate:
 - retrieval integrity check against the stored digest
 
 This is enough to show the design without handling live production health data.
+
+## Local Prototype Commands
+
+Normalize the synthetic Epic FHIR bundle:
+
+```sh
+python3 epic_fhir_ingest.py --patient-id patient-001 --fixture fixtures/epic/patient_bundle.json --output /tmp/normalized_ehr.json
+```
+
+Store the normalized payload in the local off-chain record directory and create the reference object:
+
+```sh
+python3 ehr_storage.py --input /tmp/normalized_ehr.json --record-id epic-record-001 --storage-root storage/ehr_records --reference-output /tmp/epic-record-001-reference.json
+```
+
+The prototype stores the full normalized payload at:
+
+```sh
+storage/ehr_records/epic-record-001.json
+```
+
+The generated reference JSON contains the local storage URI and `sha256:<hex>` digest. In a later Hippius-backed version, the `storageUri` can change from `local://...` to a Hippius content reference while keeping the digest and verification behavior the same.

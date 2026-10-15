@@ -1,0 +1,224 @@
+{
+  "resourceType": "Bundle",
+  "id": "epic-patient-001-ingestion-bundle",
+  "type": "collection",
+  "timestamp": "2026-03-21T10:15:00Z",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:epic-patient-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "epic-patient-001",
+        "identifier": [
+          {
+            "system": "urn:synthetic:epic:mrn",
+            "value": "MRN-000001"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "Alpha",
+            "given": ["Mock", "Patient"]
+          }
+        ],
+        "gender": "female",
+        "birthDate": "1985-04-12",
+        "active": true
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-allergy-001",
+      "resource": {
+        "resourceType": "AllergyIntolerance",
+        "id": "epic-allergy-001",
+        "patient": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "code": {
+          "text": "Penicillin"
+        },
+        "reaction": [
+          {
+            "manifestation": [
+              {
+                "text": "Rash"
+              }
+            ],
+            "severity": "moderate"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-immunization-001",
+      "resource": {
+        "resourceType": "Immunization",
+        "id": "epic-immunization-001",
+        "status": "completed",
+        "patient": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "vaccineCode": {
+          "text": "Influenza"
+        },
+        "occurrenceDateTime": "2026-01-12",
+        "performer": [
+          {
+            "actor": {
+              "display": "Campus Health Clinic"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-condition-001",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "epic-condition-001",
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "code": {
+          "text": "Hypertension"
+        },
+        "recordedDate": "2026-03-21"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-observation-bp-001",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epic-observation-bp-001",
+        "status": "final",
+        "code": {
+          "text": "Blood pressure"
+        },
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "effectiveDateTime": "2026-03-21T09:05:00Z",
+        "component": [
+          {
+            "code": {
+              "text": "Systolic blood pressure"
+            },
+            "valueQuantity": {
+              "value": 128,
+              "unit": "mmHg"
+            }
+          },
+          {
+            "code": {
+              "text": "Diastolic blood pressure"
+            },
+            "valueQuantity": {
+              "value": 82,
+              "unit": "mmHg"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-observation-cbc-001",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epic-observation-cbc-001",
+        "status": "final",
+        "code": {
+          "text": "CBC"
+        },
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "effectiveDateTime": "2026-03-21",
+        "valueString": "Within normal range"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-diagnostic-report-001",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "epic-diagnostic-report-001",
+        "status": "final",
+        "code": {
+          "text": "CBC"
+        },
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "effectiveDateTime": "2026-03-21",
+        "result": [
+          {
+            "reference": "Observation/epic-observation-cbc-001"
+          }
+        ],
+        "conclusion": "Within normal range"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-medication-request-001",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "epic-medication-request-001",
+        "status": "active",
+        "intent": "order",
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "medicationCodeableConcept": {
+          "text": "Lisinopril"
+        },
+        "authoredOn": "2026-02-14",
+        "requester": {
+          "display": "Campus Health Clinic"
+        }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-encounter-001",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "epic-encounter-001",
+        "status": "finished",
+        "class": {
+          "code": "AMB",
+          "display": "ambulatory"
+        },
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "period": {
+          "start": "2026-03-21T09:00:00Z",
+          "end": "2026-03-21T09:30:00Z"
+        }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:epic-document-reference-001",
+      "resource": {
+        "resourceType": "DocumentReference",
+        "id": "epic-document-reference-001",
+        "status": "current",
+        "type": {
+          "text": "Primary care visit summary"
+        },
+        "subject": {
+          "reference": "Patient/epic-patient-001"
+        },
+        "date": "2026-03-21T10:00:00Z",
+        "content": [
+          {
+            "attachment": {
+              "contentType": "application/pdf",
+              "url": "Binary/epic-document-binary-001",
+              "title": "Primary care visit summary"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

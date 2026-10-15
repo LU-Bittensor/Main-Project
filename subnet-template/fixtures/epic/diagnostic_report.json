@@ -1,0 +1,29 @@
+{
+  "resourceType": "DiagnosticReport",
+  "id": "epic-diagnostic-report-001",
+  "status": "final",
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/v2-0074",
+          "code": "LAB",
+          "display": "Laboratory"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "text": "CBC"
+  },
+  "subject": {
+    "reference": "Patient/epic-patient-001"
+  },
+  "effectiveDateTime": "2026-03-21",
+  "result": [
+    {
+      "reference": "Observation/epic-observation-cbc-001"
+    }
+  ],
+  "conclusion": "Within normal range"
+}
