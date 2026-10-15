@@ -16,6 +16,7 @@ from eth_account import Account
 from flask import Flask, Response, g, jsonify, request, Response
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
+from epic_oauth import EpicOAuth, EpicOAuthError
 
 from DHkey_share import (
     HIPPIUS_BUCKET,
@@ -140,6 +141,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         db().execute("INSERT OR IGNORE INTO settings VALUES ('key_check', ?)", (check,))
         db().commit()
     db_path.chmod(0o600)
+    epic_oauth = EpicOAuth(db_path, master_key, os.getenv("EPIC_CLIENT_ID", "").strip(),
+                           os.getenv("EPIC_REDIRECT_URI", "").strip())
+
     documents = DemoDocumentStore() if dev else SupabaseDocumentStore(
         supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
 
@@ -404,6 +408,38 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     @app.get("/api/health")
     def health():
         return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-registry-v1", registry_address=setting("registry_address"))
+
+    @app.post("/api/external-import/epic/authorize")
+    def authorize_epic():
+        # Existing before_request verifies the Supabase session. No user ID,
+        # redirect, issuer, or scope is accepted from the browser.
+        if dev:
+            raise APIError("Sign in with a real Medilink account to connect to Epic Sandbox.", 403)
+        if request.args or (request.content_length and request.get_json(silent=True) != {}):
+            raise APIError("This endpoint accepts no configuration overrides.")
+        try:
+            with lock:
+                return jsonify(epic_oauth.start(g.uid))
+        except EpicOAuthError as error:
+            raise APIError(str(error), 503) from error
+
+    @app.get("/api/external-import/epic/connection")
+    def epic_connection():
+        if dev:
+            raise APIError("Sign in with a real Medilink account to connect to Epic Sandbox.", 403)
+        return jsonify(epic_oauth.status(g.uid))
+
+    @app.post("/api/external-import/epic/complete")
+    def complete_epic():
+        if dev:
+            raise APIError("Sign in with a real Medilink account to connect to Epic Sandbox.", 403)
+        if request.args:
+            raise APIError("Callback parameters must be sent in the JSON body.")
+        try:
+            with lock:
+                return jsonify(epic_oauth.complete(g.uid, request.get_json(silent=True)))
+        except EpicOAuthError as error:
+            raise APIError(str(error), 400) from error
 
     @app.post("/api/enroll")
     def enroll_self():

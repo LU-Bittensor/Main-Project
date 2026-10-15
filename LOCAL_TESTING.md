@@ -222,3 +222,7 @@ The tool verifies the original project filename and encryption key, preserves re
 Automated tests cover the Supabase REST payload/byte decoding, pagination, metadata-only listing, persistence across client/API instances with a simulated remote table, missing-key failures, owner/shared/revoked access, role checks, and repeatable local-file migration. `backend/supabase/tests/record_documents.sql` exercises constraints, owner-only RLS, and column privileges with rollback fixtures on a local/staging database. The live schema migration and live cloud upload/download verification require the project admin connection and server secret; they have not been run in this workspace yet.
 
 `--dev` remains a synthetic demo: uploaded demo files live only in memory and disappear when its API stops. Use real-account mode for persistent Supabase uploads. Grant/wallet data still uses the existing local SQLite service store; only document storage changed.
+
+## Epic Sandbox connection (no record retrieval)
+
+Follow [backend/EPIC_OAUTH.md](backend/EPIC_OAUTH.md) to configure the public SMART app and exact callback URL. With the backend and frontend running, sign in to MediLink and visit `/external-import`. Connect to Epic Sandbox and authorize a patient account. The callback displays token-exchange success and transfer authorization readiness. Tokens stay encrypted on the backend; no EHR data is fetched. Use the same frontend origin throughout (do not mix `localhost` and `127.0.0.1`).

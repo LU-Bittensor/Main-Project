@@ -72,3 +72,7 @@ Chain integration tests require a separate node; see LOCAL_TESTING.md. Run Supab
 The frontend keeps React UI, browser API clients, and TanStack SSR/startup integration (`src/server.ts`, `src/start.ts`, and rendering-error helpers). Those implement the web application's runtime rather than the medical-record API. Its database types module re-exports `backend/supabase/types.ts`.
 
 The TypeScript admin/auth/cron helpers currently have no application callers; they are available for future server integrations and do not start a separate service.
+
+## Epic import authorization
+
+`key-generation/epic_oauth.py` implements account-bound state/PKCE, callback completion, server-side token exchange, and encrypted connection persistence. The frontend displays verified token-exchange success and transfer authorization readiness. No EHR data is fetched. See [EPIC_OAUTH.md](EPIC_OAUTH.md) for app registration, local testing, API contracts and limitations.
