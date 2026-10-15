@@ -63,3 +63,9 @@ Keep the database and master key together across restarts. A chain reset that se
 Tests use mocked Epic token responses, covering PKCE, account binding, encryption, persistence, expiry, replay, denial, malformed responses and authenticated API routes. A live Epic sandbox login/token exchange still requires your registered app and sandbox patient.
 
 References: [Epic OAuth documentation](https://fhir.epic.com/Documentation?docId=oauth2), [SMART App Launch](https://hl7.org/fhir/smart-app-launch/STU2.2/app-launch.html).
+
+## EHR intake schema (prepared, not applied)
+
+Apply `supabase/migrations/20261015120000_ehr_intake.sql` after the existing migrations, using the Supabase SQL editor or your normal migration workflow. It adds connections, import jobs/steps, current FHIR resources, automatic resource-version history, and nullable links on `records`. Run `supabase/tests/ehr_intake.sql` on a local/staging database to exercise ownership, deduplication, history, and compatibility; its fixtures roll back.
+
+This migration does not move the existing SQLite OAuth connections, implement retrieval, or change the current document MIME/size limits. The future importer must reuse a stable connection, canonicalize provider URLs and resource JSON, compute SHA-256 content hashes, set import timestamps, verify patient context, and create catalog/attachment records. Store source timestamps and partial dates unchanged in JSON even when no SQL timestamp can represent them. Keep credentials in backend-only encrypted storage. Shared reads must go through backend grant checks, including FHIR payloads, rather than adding broad recipient RLS policies. Regenerate Supabase TypeScript types after applying the migration.
