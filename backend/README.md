@@ -1,0 +1,74 @@
+# MediLink backend
+
+This directory contains the Python API, blockchain tooling, Supabase database assets, and server-only TypeScript helpers.
+
+## Layout
+
+| Path | Responsibility |
+| --- | --- |
+| `key-generation/grant_api.py` | Authenticated grant, record, document, and vault API |
+| `key-generation/documents.py` | Document contents and metadata in Supabase records |
+| `key-generation/chain_grants.py` | AccessRegistry blockchain adapter |
+| `key-generation/DHkey_share.py` | Key generation, encryption, and DH verification |
+| `key-generation/migrate_documents_to_supabase.py` | Legacy local-document migration |
+| `key-generation/operation-flow/` | API compatibility entry point and command-line examples |
+| `key-generation/tests/` | Python API, document, and chain integration tests |
+| `key-generation/testContractDeployment/` | Hardhat configuration, deployment scripts, and Solidity tests |
+| `contracts/AccessRegistry.sol` | Authoritative registry contract; Hardhat copies it into its compilation directory |
+| `supabase/` | Supabase configuration, SQL migrations/tests, and shared schema types |
+| `src/integrations/supabase/` | Server-only Supabase admin, request-authentication, and cron helpers |
+
+The complete former `Main-Project/key-generation` project now lives at `Main-Project/backend/key-generation`. Its internal layout is preserved, including legacy `DataAccessControl.sol` examples and the existing Node dependency manifests. The TypeScript package in this directory and the Hardhat package are separate projects.
+
+## Start locally
+
+From the repository root, run these in two terminals:
+
+**Backend (blockchain + Python API):**
+
+```sh
+bash Main-Project/backend/start_backend.sh
+```
+
+**Frontend:**
+
+```sh
+bash Main-Project/frontend/load_frontend.sh
+```
+
+From this directory, `bash start_backend.sh` also works. The backend launcher installs missing dependencies, compiles the contracts, starts Hardhat on port 8545, waits for readiness, then starts the real-account Python API on port 5001. Output from both services stays in the terminal.
+
+Press Ctrl+C to stop both processes started by the launcher. If a compatible Hardhat node already exists, it is reused and left running on exit. An occupied API port causes a clear error rather than launching a second API. If a newly started service fails, the other owned process is stopped.
+
+Configure `key-generation/.env` with your Supabase settings first; the launcher retains the existing API script and persistent master key/data directory. This combined launcher supports the local chain on port 8545. For custom RPC settings or fixture mode, use the individual scripts in `key-generation` instead. Stopping/restarting a launcher-owned Hardhat node resets its in-memory chain; the existing API's chain-instance directories isolate the resulting grant state.
+
+See [LOCAL_TESTING.md](../LOCAL_TESTING.md) for manual service commands, Supabase setup, and environment configuration.
+
+## Existing local state
+
+The move preserved the existing `.env`, `.grant-*` stores, master keys, PEM files, and installed dependencies inside `key-generation`. Their ignore rules moved with them. No credentials were regenerated and no database migration was applied. The API launchers now resolve their default data paths beneath `backend/key-generation`.
+
+Restart existing API processes from the new path after stopping them. Update any custom absolute `GRANT_DATA_DIR`, `GRANT_DOCUMENT_DIR`, virtualenv, IDE, or shell paths that reference the old location. The local virtualenv's text launchers were adjusted for this move; when setting up another checkout, create its virtualenv with the commands above. Use `load_API_bc.sh` to continue using the existing persistent master key.
+
+## Validation
+
+```sh
+# From Main-Project/backend/key-generation
+.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py -q
+
+# From Main-Project/backend/key-generation/testContractDeployment
+npx hardhat compile
+npx hardhat test
+
+# From Main-Project/backend
+npm install
+npm run typecheck
+```
+
+Chain integration tests require a separate node; see LOCAL_TESTING.md. Run Supabase CLI commands from `Main-Project/backend`, and verify `supabase/config.toml` points to the intended project before applying migrations.
+
+## Frontend runtime boundary
+
+The frontend keeps React UI, browser API clients, and TanStack SSR/startup integration (`src/server.ts`, `src/start.ts`, and rendering-error helpers). Those implement the web application's runtime rather than the medical-record API. Its database types module re-exports `backend/supabase/types.ts`.
+
+The TypeScript admin/auth/cron helpers currently have no application callers; they are available for future server integrations and do not start a separate service.

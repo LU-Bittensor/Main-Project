@@ -1,10 +1,12 @@
 # Local testing — shared AccessRegistry
 
-The frontend and Python grant API now use `frontend/AccessRegistry.sol` unchanged. Hardhat copies that source into its contracts directory when loading its config, so there is one authoritative source. `DataAccessControl.sol` and its standalone CLI remain legacy examples; the API no longer deploys pair contracts.
+The frontend and Python grant API now use `backend/contracts/AccessRegistry.sol` unchanged. Hardhat copies that source into its contracts directory when loading its config, so there is one authoritative source. `DataAccessControl.sol` and its standalone CLI remain legacy examples; the API no longer deploys pair contracts.
 
 ## Start the services
 
-1. Blockchain, from `Main-Project/key-generation/testContractDeployment`:
+For the normal real-account setup, run `bash Main-Project/backend/start_backend.sh` from the repository root. In a second terminal run `bash Main-Project/frontend/load_frontend.sh`. The combined backend launcher waits for Hardhat before starting the API and stops its own processes on Ctrl+C; an existing Hardhat node is reused and left running. Manual commands follow.
+
+1. Blockchain, from `Main-Project/backend/key-generation/testContractDeployment`:
 
    ```sh
    npm install
@@ -14,7 +16,7 @@ The frontend and Python grant API now use `frontend/AccessRegistry.sol` unchange
 
    Reuse an existing node on 8545 rather than launching another. Compiling alone does not deploy the registry.
 
-2. API, from `Main-Project/key-generation`:
+2. API, from `Main-Project/backend/key-generation`:
 
    ```sh
    python3 -m venv .venv
@@ -70,13 +72,13 @@ For Supabase, set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and a persistent 3
 
 For API/DH testing without any blockchain, omit `--chain` and use a separate data directory. Off-chain mode cannot verify or revoke on-chain permissions.
 
-The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VITE_GRANT_DEMO=false` for real users. `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. Use port 5173 with `--strictPort`, or configure API `FRONTEND_ORIGINS` explicitly. Environment files are not automatically loaded by Python. The real-account launcher explicitly loads `key-generation/.env`.
+The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VITE_GRANT_DEMO=false` for real users. `VITE_GRANT_API_URL` defaults to `http://127.0.0.1:5001`. Use port 5173 with `--strictPort`, or configure API `FRONTEND_ORIGINS` explicitly. Environment files are not automatically loaded by Python. The real-account launcher explicitly loads `backend/key-generation/.env`.
 
 **Local demo account error:** the frontend has a Supabase session but the API uses `--dev`. Use matching modes, not extra records. Empty record lists show “No records yet.”
 
 ## Automated checks
 
-From `key-generation`:
+From `backend/key-generation`:
 
 ```sh
 .venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py -q
@@ -102,7 +104,7 @@ The table contains `id` (Auth's generated UUID, also used by records/grants), pl
 
 ### Apply the migration
 
-The supplied pooler URI targets project `cwyxwmzquatqlbufsdob`, while `frontend/supabase/config.toml` names another project. Choose the intended project in Supabase's SQL Editor. For a new database, apply all files in `frontend/supabase/migrations` in filename order. If the two September 7 migrations are already applied, apply only `20260928210000_create_patients.sql`. It also backfills existing patients. Do not rerun previously applied migrations.
+The supplied pooler URI targets project `cwyxwmzquatqlbufsdob`, while `backend/supabase/config.toml` names another project. Choose the intended project in Supabase's SQL Editor. For a new database, apply all files in `backend/supabase/migrations` in filename order. If the two September 7 migrations are already applied, apply only `20260928210000_create_patients.sql`. It also backfills existing patients. Do not rerun previously applied migrations.
 
 Alternatively, with `psql` installed, run this from `Main-Project` after the earlier migrations have been applied:
 
@@ -111,7 +113,7 @@ PGSSLMODE=require psql \
   --host=aws-0-ca-central-1.pooler.supabase.com --port=6543 \
   --username=postgres.cwyxwmzquatqlbufsdob --dbname=postgres \
   --password --set=ON_ERROR_STOP=1 \
-  --file=frontend/supabase/migrations/20260928210000_create_patients.sql
+  --file=backend/supabase/migrations/20260928210000_create_patients.sql
 ```
 
 Enter the database password at the prompt. The transaction-pooler connection is for database administration/server code; never put it or the database password in frontend code or `VITE_` variables.
@@ -131,7 +133,7 @@ Use the same project for the Python API's `SUPABASE_URL` and `SUPABASE_PUBLISHAB
 1. Visit `/signin`, select **Patient Sign In**, then **Need an account? Create one**. Enter a name, an email you control, and a password.
 2. Submit and confirm your email if prompted. In SQL Editor, run `select id, name, email, created_at from public.patients order by created_at desc;`. The ID should match **Authentication → Users**.
 3. Sign out and sign back in. Creating a care provider should not create a patient row.
-4. On local/staging Supabase, run `frontend/supabase/tests/patients.sql` to test signup, provider exclusion, updates, row isolation, and deletion. It rolls back its fixtures. Browser testing is still needed to verify password authentication.
+4. On local/staging Supabase, run `backend/supabase/tests/patients.sql` to test signup, provider exclusion, updates, row isolation, and deletion. It rolls back its fixtures. Browser testing is still needed to verify password authentication.
 
 ## Client-side Hippius key vault
 
@@ -140,7 +142,7 @@ After Supabase sign-in/sign-up, the frontend creates or unlocks an encrypted key
 **API (same process as grant API):**
 
 ```sh
-cd Main-Project/key-generation
+cd Main-Project/backend/key-generation
 # Optional: real Hippius. If unset, vault blobs are stored under GRANT_DATA_DIR/vault_objects/
 # export HIPPIUS_ACCESS_KEY=...
 # export HIPPIUS_SECRET_KEY=...
@@ -160,7 +162,7 @@ Endpoints (Bearer Supabase JWT, or `demo-*` in `--dev`):
 
 ```sh
 cd health-locker-guard && npm test
-cd Main-Project/key-generation && pytest tests/test_grant_api.py -k vault
+cd Main-Project/backend/key-generation && pytest tests/test_grant_api.py -k vault
 ```
 
 Grant/access signing remains custodial under `GRANT_MASTER_KEY` for now; the vault holds keys for the next non-custodial cutover.
@@ -177,9 +179,9 @@ Uploads now store the **actual file bytes in `public.records.file_content`** (`b
 
 ### Required setup
 
-1. In the SQL Editor for the same Supabase project used by the frontend/API, apply `frontend/supabase/migrations/20261013190000_record_documents.sql` once, after the existing migrations. It adds the file columns and constraints and limits direct client writes to metadata. Existing records remain intact.
-2. Copy `key-generation/.env.example` to `key-generation/.env`. Set `SUPABASE_SECRET_KEY` to a server secret key from that project, or use the legacy `SUPABASE_SERVICE_ROLE_KEY` instead. Do not put either secret in the frontend, a `VITE_` variable, source control, or chat. The API needs this key to fetch a shared record after validating its grant; the recipient's own Supabase token cannot bypass the owner-only records policy.
-3. Restart `bash load_API_bc.sh` from `key-generation`, then start the frontend normally. The launcher reads the backend `.env`; direct Python starts must have those variables exported. Preserve `GRANT_MASTER_KEY` and the grant database for existing shares.
+1. In the SQL Editor for the same Supabase project used by the frontend/API, apply `backend/supabase/migrations/20261013190000_record_documents.sql` once, after the existing migrations. It adds the file columns and constraints and limits direct client writes to metadata. Existing records remain intact.
+2. Copy `backend/key-generation/.env.example` to `backend/key-generation/.env`. Set `SUPABASE_SECRET_KEY` to a server secret key from that project, or use the legacy `SUPABASE_SERVICE_ROLE_KEY` instead. Do not put either secret in the frontend, a `VITE_` variable, source control, or chat. The API needs this key to fetch a shared record after validating its grant; the recipient's own Supabase token cannot bypass the owner-only records policy.
+3. Restart `bash load_API_bc.sh` from `backend/key-generation`, then start the frontend normally. The launcher reads the backend `.env`; direct Python starts must have those variables exported. Preserve `GRANT_MASTER_KEY` and the grant database for existing shares.
 
 Missing schema or server credentials return a configuration error. There is no automatic local-file fallback. Authenticated owners retain direct read access to their own records under RLS. Shared recipients receive bytes only through the grant API, which checks ownership or the exact active grant and runs DH/on-chain access verification as configured. Revocation blocks future delivery, not copies already delivered.
 
@@ -200,7 +202,7 @@ The `bytea` value appears as encoded binary in the table editor. Use the applica
 
 ### Copy previous local uploads
 
-Legacy local files are preserved and are not automatically deleted or silently uploaded. To copy them into Supabase while retaining IDs (and therefore existing grants), use `migrate_documents_to_supabase.py`. Stop the old API first. After applying the SQL migration, export the backend `.env` variables and the original `GRANT_MASTER_KEY` in your terminal. For the standard launcher setup, from `key-generation`:
+Legacy local files are preserved and are not automatically deleted or silently uploaded. To copy them into Supabase while retaining IDs (and therefore existing grants), use `migrate_documents_to_supabase.py`. Stop the old API first. After applying the SQL migration, export the backend `.env` variables and the original `GRANT_MASTER_KEY` in your terminal. For the standard launcher setup, from `backend/key-generation`:
 
 ```sh
 set -a
@@ -217,6 +219,6 @@ The tool verifies the original project filename and encryption key, preserves re
 
 ### Verification boundaries
 
-Automated tests cover the Supabase REST payload/byte decoding, pagination, metadata-only listing, persistence across client/API instances with a simulated remote table, missing-key failures, owner/shared/revoked access, role checks, and repeatable local-file migration. `frontend/supabase/tests/record_documents.sql` exercises constraints, owner-only RLS, and column privileges with rollback fixtures on a local/staging database. The live schema migration and live cloud upload/download verification require the project admin connection and server secret; they have not been run in this workspace yet.
+Automated tests cover the Supabase REST payload/byte decoding, pagination, metadata-only listing, persistence across client/API instances with a simulated remote table, missing-key failures, owner/shared/revoked access, role checks, and repeatable local-file migration. `backend/supabase/tests/record_documents.sql` exercises constraints, owner-only RLS, and column privileges with rollback fixtures on a local/staging database. The live schema migration and live cloud upload/download verification require the project admin connection and server secret; they have not been run in this workspace yet.
 
 `--dev` remains a synthetic demo: uploaded demo files live only in memory and disappear when its API stops. Use real-account mode for persistent Supabase uploads. Grant/wallet data still uses the existing local SQLite service store; only document storage changed.
