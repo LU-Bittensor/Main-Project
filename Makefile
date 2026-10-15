@@ -403,7 +403,7 @@ metagraph:
 
 EVM_RPC_URL  ?= https://test.chain.opentensor.ai
 EVM_CHAIN_ID ?= 945
-VALIDATOR_CONFIG ?= subnet-template/validator.config.yml
+VALIDATOR_CONFIG ?= subnet/validator.config.yml
 
 ## deploy-registry: Compile and deploy AccessRegistry.sol (needs OWNER_PRIVATE_KEY)
 deploy-registry:
@@ -411,10 +411,10 @@ deploy-registry:
 	RPC_URL=$(EVM_RPC_URL) CHAIN_ID=$(EVM_CHAIN_ID) OWNER_PRIVATE_KEY=$(OWNER_PRIVATE_KEY) \
 		python key-generation/deploy_access_registry.py
 
-## validator-live: Run validatorv1 with live eth_getLogs (set ACCESS_REGISTRY)
+## validator-live: Run validator with live eth_getLogs (set ACCESS_REGISTRY)
 validator-live:
 	@test -n "$(ACCESS_REGISTRY)" || (echo "Usage: make validator-live ACCESS_REGISTRY=0x..." && exit 1)
-	cd subnet-template && python validatorv1.py \
+	cd subnet && python validator.py \
 		--config validator.config.yml \
 		--no-mock-events \
 		--access-registry $(ACCESS_REGISTRY) \

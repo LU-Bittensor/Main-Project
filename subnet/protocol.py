@@ -145,7 +145,7 @@ class Dummy(Synapse):
 class MessageSynapse:
     """Generic envelope: arbitrary fields travel in `payload`.
 
-    Used by validatorv1/minerv1 — Bittensor v11 no longer ships Synapse/Axon/Dendrite.
+    Used by validator/miner — Bittensor v11 no longer ships Synapse/Axon/Dendrite.
     """
 
     payload: dict[str, typing.Any] = field(default_factory=dict)

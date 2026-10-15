@@ -37,7 +37,7 @@ from the coldkey into an EVM key without a second faucet.
                               deploy AccessRegistry (0x…)
                                          │
                                          ▼
-                     validatorv1 eth_getLogs → receipts → miners
+                     validator eth_getLogs → receipts → miners
 ```
 
 ---
@@ -149,7 +149,7 @@ Validators do **not** need the EVM private key to score miners. They only need:
 3. The deployed `access_registry` address
 4. `mock_events: false` (live `eth_getLogs`)
 
-In `[../subnet-template/validator.config.yml](../subnet-template/validator.config.yml)`:
+In `[../subnet/validator.config.yml](../subnet/validator.config.yml)`:
 
 ```yaml
 evm:
@@ -159,10 +159,10 @@ evm:
   mock_events: false
 ```
 
-Loop (see also [`../../subnet-template/markdowns/ARCHITECTURE.md`](../../subnet-template/markdowns/ARCHITECTURE.md)):
+Loop (see also [`../../subnet/markdowns/ARCHITECTURE.md`](../../subnet/markdowns/ARCHITECTURE.md)):
 
 1. Owner/user txs call `registerResource` / `grantAccess` / … on the contract.
-2. `validatorv1` polls logs (`ResourceRegistered`, `AccessGranted`, …).
+2. `validator` polls logs (`ResourceRegistered`, `AccessGranted`, …).
 3. Builds MediLink receipts and fans them out to miners.
 4. Challenges / proofs → weights on the **substrate** subnet (e.g. netuid 573).
 
@@ -181,7 +181,7 @@ btcli evm associate --netuid 573 --evm-key access-registry \
   -w AidanColdKey -H AidanHotKey -n test -y
 ```
 
-`validatorv1` can resolve H160 → SS58 via `SubtensorModule.EVMAssociation`. With
+`validator` can resolve H160 → SS58 via `SubtensorModule.EVMAssociation`. With
 `require_evm_association: false` (current default), unmapped actors still produce receipts
 using the checksum H160 as a fallback id.
 
@@ -218,4 +218,4 @@ deploy, means you never see live logs.
 Related files: [`../README.md`](../README.md), [`../AccessRegistry.sol`](../AccessRegistry.sol),
 [`../deploy_access_registry.py`](../deploy_access_registry.py),
 [`../../Contract_Logic.md`](../../Contract_Logic.md),
-[`../../subnet-template/markdowns/OPERATOR_GUIDE.md`](../../subnet-template/markdowns/OPERATOR_GUIDE.md).
+[`../../subnet/markdowns/OPERATOR_GUIDE.md`](../../subnet/markdowns/OPERATOR_GUIDE.md).

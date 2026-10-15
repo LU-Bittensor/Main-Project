@@ -137,22 +137,21 @@ Full request/response field lists live in code (`protocol.py`, `hippius_cli.py`)
 
 ```bash
 cd Main-Project
-python3 -m unittest subnet-template/tests/test_hippius_cli.py
+python3 -m unittest subnet/tests/test_hippius_cli.py
 # Optional miner synapse flow:
-python3 -m unittest subnet-template/tests/test_synapse_flow.py
 ```
 
 Manual examples:
 
 ```bash
-python3 subnet-template/hippius_cli.py metadata \
+python3 subnet/hippius_cli.py metadata \
   --patient-id patient-001 --request-id request-001 --record-type ehr --dry-run
 
-python3 subnet-template/hippius_cli.py access \
+python3 subnet/hippius_cli.py access \
   --requester-id requester-001 --patient-id patient-001 --record-id record-001 \
   --purpose-of-use treatment --mock-response
 
-python3 subnet-template/hippius_cli.py retrieve \
+python3 subnet/hippius_cli.py retrieve \
   --requester-id requester-001 --patient-id patient-001 --record-id record-001 \
   --chunk-range-start 0 --chunk-range-end 2 --mock-response
 ```
@@ -229,11 +228,11 @@ python3 -m unittest tests/test_hippius_cli.py
 
 ---
 
-## 8. How this relates to `validatorv1` / `minerv1`
+## 8. How this relates to `validator` / `miner`
 
 | Path | What it proves |
 |------|----------------|
-| **Incentive path** (`validatorv1` ↔ `minerv1` HTTP) | AccessGranted → AUDIT receipts → challenges → SetWeights ([`OPERATOR_GUIDE.md`](OPERATOR_GUIDE.md)) |
+| **Incentive path** (`validator` ↔ `miner` HTTP) | AccessGranted → AUDIT receipts → challenges → SetWeights ([`OPERATOR_GUIDE.md`](OPERATOR_GUIDE.md)) |
 | **Medical Synapse / Hippius CLI path** | App-facing metadata/access/retrieve/integrity envelopes |
 | **Epic ingestion path** | How PHI enters encrypted storage before registry + audit |
 

@@ -13,13 +13,13 @@ Deploy one multi-grantee `AccessRegistry` to Subtensor EVM (or Hardhat), store c
 | [`.env.example`](.env.example) | Env vars template (copy secrets locally; do not commit) |
 | [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md) | Concepts: SS58 TAO → EVM fund → deploy on chain 945 |
 
-Docs: [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md), [`../Hippius_EHR_Storage.md`](../Hippius_EHR_Storage.md), [`../Contract_Logic.md`](../Contract_Logic.md), [`../subnet-template/markdowns/ARCHITECTURE.md`](../subnet-template/markdowns/ARCHITECTURE.md), [`../subnet-template/markdowns/OPERATOR_GUIDE.md`](../subnet-template/markdowns/OPERATOR_GUIDE.md)
+Docs: [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md), [`../Hippius_EHR_Storage.md`](../Hippius_EHR_Storage.md), [`../Contract_Logic.md`](../Contract_Logic.md), [`../subnet/markdowns/ARCHITECTURE.md`](../subnet/markdowns/ARCHITECTURE.md), [`../subnet/markdowns/OPERATOR_GUIDE.md`](../subnet/markdowns/OPERATOR_GUIDE.md)
 
 ## 1. Install deps
 
 ```bash
 source /path/to/bt_venv/bin/activate
-pip install -r subnet-template/requirements.txt
+pip install -r subnet/requirements.txt
 ```
 
 ## 2. Deploy (Hardhat example)
@@ -64,7 +64,7 @@ python key-generation/access_registry_client.py
 
 ## 5. Poll with the validator (live)
 
-Edit `subnet-template/validator.config.yml`:
+Edit `subnet/validator.config.yml`:
 
 ```yaml
 evm:

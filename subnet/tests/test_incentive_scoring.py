@@ -1,4 +1,4 @@
-"""Unit tests for MediLink validatorv1 incentive scoring (Part A2).
+"""Unit tests for MediLink validator incentive scoring (Part A2).
 
 Exercises score_miner dimensions and EMA without connecting to Subtensor or EVM.
 """
@@ -23,12 +23,12 @@ from incentive_test_helpers import ensure_import_env  # noqa: E402
 ensure_import_env()
 
 from protocol import MessageSynapse  # noqa: E402
-from validatorv1 import (  # noqa: E402
+from validator import (  # noqa: E402
     EMA_ALPHA,
     LATENCY_CUTOFF_MS,
     LATENCY_TARGET_MS,
     MerkleTree,
-    ValidatorV1,
+    Validator,
     compute_cid,
 )
 
@@ -39,9 +39,9 @@ def _msg(payload: dict | None) -> MessageSynapse | None:
     return MessageSynapse(payload=payload)
 
 
-def make_scoring_validator() -> ValidatorV1:
-    """Build a ValidatorV1 without __init__ (no wallet / chain)."""
-    v = object.__new__(ValidatorV1)
+def make_scoring_validator() -> Validator:
+    """Build a Validator without __init__ (no wallet / chain)."""
+    v = object.__new__(Validator)
     v.actor_tips = {}
     v.batch_tips = {"global": {"tip_batch_cid": None, "batch_count": 0, "receipt_cids": []}}
     v.batch_receipt_cids = {}
@@ -116,7 +116,7 @@ class TestIntegrityAndConsistency(unittest.TestCase):
         }
 
     def _good_pin(self) -> MessageSynapse:
-        from validatorv1 import canonical_bytes
+        from validator import canonical_bytes
 
         return _msg(
             {
@@ -224,7 +224,7 @@ class TestScoreMinerComposite(unittest.TestCase):
         }
 
     def _responses(self, *, with_pin: bool = True):
-        from validatorv1 import canonical_bytes
+        from validator import canonical_bytes
 
         pin = (
             _msg({"receipt_json": canonical_bytes(self.receipt).decode("utf-8")})
@@ -353,14 +353,14 @@ class TestAccessGrantedAuditCid(unittest.TestCase):
         self.assertEqual(got, hippius)
 
     def test_log_key_dedup_format(self):
-        key = ValidatorV1._log_key(
+        key = Validator._log_key(
             {"transactionHash": bytes.fromhex("ab" * 32), "logIndex": 7}
         )
         self.assertTrue(key.startswith("0x"))
         self.assertTrue(key.endswith("-7"))
 
     def test_build_receipt_audit_uses_tx_id(self):
-        from validatorv1 import CommitmentEvent
+        from validator import CommitmentEvent
 
         v = make_scoring_validator()
         v.wallet = SimpleNamespace(hotkey=SimpleNamespace(ss58_address="5Val"))

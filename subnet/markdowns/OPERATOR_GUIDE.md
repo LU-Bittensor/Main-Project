@@ -2,8 +2,7 @@
 
 Run and prove the incentive loop on **Bittensor testnet netuid 573** + **Subtensor EVM 945** (or local Hardhat for the registry only).
 
-**Use only:** `minerv1.py` + `validatorv1.py`  
-**Do not use:** `miner.py` / `validator.py` (legacy; no AccessGranted path)
+**Use only:** `miner.py` + `validator.py`
 
 **Architecture:** [`ARCHITECTURE.md`](ARCHITECTURE.md) · **Epic / Hippius:** [`INTEGRATIONS.md`](INTEGRATIONS.md)  
 **Config:** [`../validator.config.yml`](../validator.config.yml) · **EVM deploy concepts:** [`../../key-generation/markdowns/Subtensor_EVM_Deploy.md`](../../key-generation/markdowns/Subtensor_EVM_Deploy.md)
@@ -121,7 +120,7 @@ Validator overrides: `--evm-rpc http://127.0.0.1:8545 --evm-chain-id 31337 --evm
 ## 3. Unit tests (offline)
 
 ```bash
-cd subnet-template
+cd subnet
 ../../bt_venv/bin/python -m unittest tests.test_incentive_scoring tests.test_incentive_smoke -v
 ```
 
@@ -134,10 +133,10 @@ Covers scoring, EMA, AUDIT smoke, resource-cache / `tx_id`. No Subtensor/EVM req
 Bittensor v11: miner serves FastAPI; validator HTTP-POSTs. Loopback ServeAxon is rejected on-chain — use `LOCAL_MINER_AXON` for same-host smoke.
 
 ```bash
-cd subnet-template
+cd subnet
 
 # Terminal A — miner
-python minerv1.py \
+python miner.py \
   --netuid 573 \
   --wallet.name test-miner \
   --wallet.hotkey default \
@@ -155,7 +154,7 @@ python minerv1.py \
 # Terminal B — validator (live registry)
 export CONTRACT_ADDRESS=0x...   # or source ../key-generation/deployment.exports.sh
 LOCAL_MINER_AXON=127.0.0.1:8091 \
-python validatorv1.py \
+python validator.py \
   --config validator.config.yml \
   --netuid 573 \
   --network test \
@@ -263,15 +262,15 @@ export RPC_URL=https://test.chain.opentensor.ai CHAIN_ID=945
 
 ```bash
 # A — miner
-cd /Users/aidanosullivan/YumaBittensor/Main-Project/subnet-template
-python minerv1.py --netuid 573 --wallet.name test-miner --wallet.hotkey default \
+cd /Users/aidanosullivan/YumaBittensor/Main-Project/subnet
+python miner.py --netuid 573 --wallet.name test-miner --wallet.hotkey default \
   --subtensor.network test --axon.port 8091 --axon.ip auto --logging.info
 ```
 
 ```bash
 # B — validator
-cd /Users/aidanosullivan/YumaBittensor/Main-Project/subnet-template
-LOCAL_MINER_AXON=127.0.0.1:8091 python validatorv1.py \
+cd /Users/aidanosullivan/YumaBittensor/Main-Project/subnet
+LOCAL_MINER_AXON=127.0.0.1:8091 python validator.py \
   --config validator.config.yml --netuid 573 --network test \
   -w test-validator -H default --no-mock-events \
   --access-registry "$CONTRACT_ADDRESS"

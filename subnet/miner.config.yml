@@ -1,4 +1,4 @@
-# Reference only — minerv1.py does not load this YAML; pass CLI flags.
+# Reference only — miner.py does not load this YAML; pass CLI flags.
 netuid: 573
 subtensor:
   chain_endpoint: ""

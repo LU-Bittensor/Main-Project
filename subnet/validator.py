@@ -340,7 +340,7 @@ class _SynapseFanout:
                 out[futs[fut]] = fut.result()
         return out
 
-class ValidatorV1:
+class Validator:
     def __init__(self):
         self.config = self.get_config()
         self.setup_logging()
@@ -379,12 +379,12 @@ class ValidatorV1:
             )
 
     def get_config(self):
-        parser = argparse.ArgumentParser(description="MediLink validator v1 (Access Registry aware)")
+        parser = argparse.ArgumentParser(description="MediLink validator (Access Registry aware)")
         default_config = Path(__file__).resolve().parent / "validator.config.yml"
         parser.add_argument(
             "--config",
             default=os.getenv("VALIDATOR_CONFIG", str(default_config)),
-            help="YAML config path (default: subnet-template/validator.config.yml).",
+            help="YAML config path (default: subnet/validator.config.yml).",
         )
         parser.add_argument("--netuid", type=int, default=None, help="Subnet UID.")
         parser.add_argument(
@@ -1382,4 +1382,4 @@ class ValidatorV1:
 
 
 if __name__ == "__main__":
-    ValidatorV1().run()
+    Validator().run()

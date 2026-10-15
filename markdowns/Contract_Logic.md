@@ -9,9 +9,9 @@ Related code:
 - [`key-generation/access_registry_client.py`](key-generation/access_registry_client.py)
 - [`key-generation/ehr_hippius.py`](key-generation/ehr_hippius.py)
 - [`Hippius_EHR_Storage.md`](Hippius_EHR_Storage.md)
-- [`subnet-template/validatorv1.py`](subnet-template/validatorv1.py)
-- [`subnet-template/markdowns/ARCHITECTURE.md`](subnet-template/markdowns/ARCHITECTURE.md)
-- [`subnet-template/markdowns/OPERATOR_GUIDE.md`](subnet-template/markdowns/OPERATOR_GUIDE.md)
+- [`subnet/validator.py`](../subnet/validator.py)
+- [`subnet/markdowns/ARCHITECTURE.md`](../subnet/markdowns/ARCHITECTURE.md)
+- [`subnet/markdowns/OPERATOR_GUIDE.md`](../subnet/markdowns/OPERATOR_GUIDE.md)
 
 ---
 
@@ -172,7 +172,7 @@ EVM RPC  eth_getLogs({
          })
         │
         ▼
-validatorv1.poll_evm_commitments()
+validator.poll_evm_commitments()
         │  decode → CommitmentEvent (actor, data_cid, op_type_hint, …)
         ▼
 build_receipt() → sign → broadcast to miners → batch / challenge / weights

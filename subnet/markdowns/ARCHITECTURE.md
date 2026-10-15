@@ -2,7 +2,7 @@
 
 How the subnet turns AccessRegistry events into an auditable incentive ledger.
 
-**Code:** [`validatorv1.py`](../validatorv1.py), [`minerv1.py`](../minerv1.py), [`protocol.py`](../protocol.py), [`../key-generation/AccessRegistry.sol`](../../key-generation/AccessRegistry.sol)  
+**Code:** [`validator.py`](../validator.py), [`miner.py`](../miner.py), [`protocol.py`](../protocol.py), [`../key-generation/AccessRegistry.sol`](../../key-generation/AccessRegistry.sol)  
 **Run / prove:** [`OPERATOR_GUIDE.md`](OPERATOR_GUIDE.md) · **Epic / Hippius:** [`INTEGRATIONS.md`](INTEGRATIONS.md)
 
 ---

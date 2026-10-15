@@ -17,7 +17,7 @@ import uvicorn
 from protocol import MessageSynapse
 from logging_setup import configure_app_logging, silence_noisy_loggers
 
-log = logging.getLogger("minerv1")
+log = logging.getLogger("miner")
 
 
 VALIDATOR_SIGN_FIELDS = [
@@ -110,7 +110,7 @@ class MerkleTree:
         return proof
 
 
-class MinerV1:
+class Miner:
     def __init__(self):
         self.config = self.get_config()
         self.setup_logging()
@@ -122,7 +122,7 @@ class MinerV1:
         self.batch_tree_cache: Dict[str, MerkleTree] = {}
 
     def get_config(self):
-        parser = argparse.ArgumentParser(description="MediLink miner v1 (bittensor v11 HTTP axon)")
+        parser = argparse.ArgumentParser(description="MediLink miner (bittensor v11 HTTP axon)")
         parser.add_argument("--netuid", type=int, default=2)
         parser.add_argument("--db-path", default="./miner_store_v1.db")
         parser.add_argument("--wallet.name", dest="wallet_name", default="test-miner")
@@ -140,7 +140,7 @@ class MinerV1:
             "--logging.debug",
             dest="logging_debug",
             action="store_true",
-            help="Enable DEBUG for minerv1 subnet logic (RPC libraries stay quiet).",
+            help="Enable DEBUG for miner subnet logic (RPC libraries stay quiet).",
         )
         parser.add_argument(
             "--logging.info",
@@ -182,7 +182,7 @@ class MinerV1:
             level = logging.DEBUG
         else:
             level = logging.INFO
-        configure_app_logging(("minerv1",), level=level)
+        configure_app_logging(("miner",), level=level)
 
     def setup_bittensor_objects(self):
         self.wallet = Wallet(
@@ -290,7 +290,7 @@ class MinerV1:
         return dict(getattr(out, "payload", {}) or {})
 
     def setup_axon(self):
-        app = FastAPI(title="MediLink miner v1")
+        app = FastAPI(title="MediLink miner")
 
         @app.get("/health")
         def health():
@@ -593,4 +593,4 @@ class MinerV1:
 
 
 if __name__ == "__main__":
-    MinerV1().run()
+    Miner().run()

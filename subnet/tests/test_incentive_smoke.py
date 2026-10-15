@@ -25,14 +25,14 @@ from incentive_test_helpers import ensure_import_env  # noqa: E402
 
 ensure_import_env()
 
-from minerv1 import LocalIPFSClient, MinerV1  # noqa: E402
+from miner import LocalIPFSClient, Miner  # noqa: E402
 from protocol import MessageSynapse  # noqa: E402
-from validatorv1 import (  # noqa: E402
+from validator import (  # noqa: E402
     BATCH_SIGN_FIELDS,
     EMA_ALPHA,
     MerkleTree,
     VALIDATOR_SIGN_FIELDS,
-    ValidatorV1,
+    Validator,
     canonical_bytes,
     compute_cid,
 )
@@ -53,8 +53,8 @@ class _Hotkey:
         return _Sig(b"miner-sig-" + data[:8])
 
 
-def make_miner() -> MinerV1:
-    m = object.__new__(MinerV1)
+def make_miner() -> Miner:
+    m = object.__new__(Miner)
     m.db = sqlite3.connect(":memory:", check_same_thread=False)
     m.db.row_factory = sqlite3.Row
     m._init_schema()
@@ -66,8 +66,8 @@ def make_miner() -> MinerV1:
     return m
 
 
-def make_validator() -> ValidatorV1:
-    v = object.__new__(ValidatorV1)
+def make_validator() -> Validator:
+    v = object.__new__(Validator)
     v.actor_tips = {}
     v.batch_tips = {"global": {"tip_batch_cid": None, "batch_count": 0, "receipt_cids": []}}
     v.batch_receipt_cids = {}
@@ -86,7 +86,7 @@ def make_validator() -> ValidatorV1:
     return v
 
 
-def build_signed_receipt(v: ValidatorV1, actor: str, data_cid: str) -> tuple[dict, str]:
+def build_signed_receipt(v: Validator, actor: str, data_cid: str) -> tuple[dict, str]:
     actor_state = v.actor_tips.get(actor, {})
     receipt = {
         "spec_version": "1.0",
@@ -112,7 +112,7 @@ def build_signed_receipt(v: ValidatorV1, actor: str, data_cid: str) -> tuple[dic
     return receipt, receipt_cid
 
 
-def close_batch(v: ValidatorV1) -> tuple[dict, str]:
+def close_batch(v: Validator) -> tuple[dict, str]:
     cids = sorted(v.batch_pending)
     tree = MerkleTree(cids)
     envelope = {
@@ -222,7 +222,7 @@ class TestIncentiveSmoke(unittest.TestCase):
         validator._cache_resource(resource_id, hippius_cid, data_hash="0x" + "cd" * 32, owner=actor)
 
         event_tx = "0x" + "11" * 32
-        event = __import__("validatorv1", fromlist=["CommitmentEvent"]).CommitmentEvent(
+        event = __import__("validator", fromlist=["CommitmentEvent"]).CommitmentEvent(
             actor_evm_addr=actor,
             data_cid=validator._lookup_resource_data_cid(resource_id, "0x" + "cd" * 32),
             hippius_status="SUCCESS",

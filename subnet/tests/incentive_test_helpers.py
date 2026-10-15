@@ -7,7 +7,7 @@ import types
 
 
 def ensure_import_env() -> None:
-    """Patch missing Synapse and light stubs before importing protocol / minerv1."""
+    """Patch missing Synapse and light stubs before importing protocol / miner."""
     try:
         import bittensor as bt
     except ImportError:
@@ -35,7 +35,7 @@ def ensure_import_env() -> None:
         if not hasattr(bt, "Wallet"):
             bt.Wallet = Wallet
 
-    # minerv1 imports fastapi/uvicorn at module level; stub if absent.
+    # miner imports fastapi/uvicorn at module level; stub if absent.
     if "fastapi" not in sys.modules:
         try:
             import fastapi  # noqa: F401

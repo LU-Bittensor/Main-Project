@@ -6,6 +6,9 @@
 *.key
 deployment.exports.sh
 deployment.json
+.grant-pairs-local/
+.grant-pairs-mine/
+.grant-pairs-data/
 
 # Demo / Hardhat local state
 .ehr_local/

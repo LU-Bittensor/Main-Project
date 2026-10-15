@@ -8,18 +8,16 @@ Bittensor subnet that turns **AccessRegistry** access events into a signed, chal
 | [`markdowns/OPERATOR_GUIDE.md`](markdowns/OPERATOR_GUIDE.md) | Testnet 573 setup, Hardhat/945 deploy, e2e prove checklist |
 | [`markdowns/INTEGRATIONS.md`](markdowns/INTEGRATIONS.md) | Epic SMART/FHIR, Hippius CLI, off-chain hash workflow |
 
-**Run these binaries:** `minerv1.py` + `validatorv1.py`  
+**Run these binaries:** `miner.py` + `validator.py`  
 **Config:** [`validator.config.yml`](validator.config.yml)  
 **Registry / DH / deploy:** [`../key-generation/`](../key-generation/)
-
-Legacy `miner.py` / `validator.py` are demos and do **not** drive the AccessGranted → SetWeights path.
 
 ## Quick start
 
 ```bash
 source /Users/aidanosullivan/YumaBittensor/bt_venv/bin/activate
 cd /Users/aidanosullivan/YumaBittensor/Main-Project
-pip install -r subnet-template/requirements.txt
+pip install -r subnet/requirements.txt
 
 # Full operator path (wallets, registry, miner, validator, unlock):
 # → markdowns/OPERATOR_GUIDE.md
@@ -28,16 +26,16 @@ pip install -r subnet-template/requirements.txt
 Offline incentive tests:
 
 ```bash
-cd subnet-template
+cd subnet
 ../../bt_venv/bin/python -m unittest tests.test_incentive_scoring tests.test_incentive_smoke -v
 ```
 
 ## Layout
 
 ```
-subnet-template/
-  validatorv1.py      # EVM poll → receipts → challenges → SetWeights
-  minerv1.py          # FastAPI axon: /receipt /batch /challenge/* /index
+subnet/
+  validator.py        # EVM poll → receipts → challenges → SetWeights
+  miner.py            # FastAPI axon: /receipt /batch /challenge/* /index
   protocol.py         # MessageSynapse + medical Synapse shapes
   validator.config.yml
   tests/
