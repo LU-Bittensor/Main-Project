@@ -1,11 +1,32 @@
-netuid: 2
+netuid: 573
+
+# Bittensor side (subnet)
 subtensor:
-  chain_endpoint: ws://127.0.0.1:9945
-  network: local
+  # Use ws:// URL or network name (local / test / finney)
+  # Prefer network name; leave chain_endpoint empty so validator uses `test`.
+  chain_endpoint: ""
+  network: test
+
 wallet:
   name: test-validator
   hotkey: default
+
 axon:
   port: 8092
+
 logging:
   debug: true
+
+# Subtensor EVM side (Access Registry) — different RPC from Bittensor WS above.
+# After deploy: python key-generation/deploy_access_registry.py
+# then set access_registry / copy from deployment.json or env ACCESS_REGISTRY.
+evm:
+  rpc_url: https://test.chain.opentensor.ai
+  chain_id: 945
+  # Set after deploy (0x...). Empty + mock_events=true keeps mock mode.
+  access_registry: "0xCA8Cb3EbD9D1Be4d555cA5800Edd116D789660E1"
+  start_block: 8063400
+  # true = synthetic events (no eth_getLogs). false = live poll of access_registry.
+  mock_events: false
+  skip_deny_receipts: true
+  require_evm_association: false

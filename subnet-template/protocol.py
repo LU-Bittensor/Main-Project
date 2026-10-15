@@ -1,7 +1,17 @@
 import typing
+from dataclasses import dataclass, field
 
-from bittensor import Synapse
 from pydantic import BaseModel
+
+try:
+    from bittensor import Synapse
+except ImportError:  # Bittensor v11+ no longer ships Synapse
+    class Synapse:  # type: ignore[no-redef]
+        """Minimal stand-in so legacy typed synapses still import on v11."""
+
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 
 
 class Immunization(BaseModel):
@@ -129,3 +139,13 @@ class Dummy(Synapse):
     dummyInput: int
 
     dummyOutput: typing.Optional[int] = None
+
+
+@dataclass
+class MessageSynapse:
+    """Generic envelope: arbitrary fields travel in `payload`.
+
+    Used by validatorv1/minerv1 — Bittensor v11 no longer ships Synapse/Axon/Dendrite.
+    """
+
+    payload: dict[str, typing.Any] = field(default_factory=dict)

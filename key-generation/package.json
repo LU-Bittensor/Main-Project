@@ -1,0 +1,19 @@
+{
+  "name": "key-generation",
+  "version": "1.0.0",
+  "description": "Deploy one `AccessRegistry` to Subtensor EVM, then point MediLink validators at that address.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
+    "@types/node": "^22.20.2",
+    "hardhat": "^3.18.1",
+    "typescript": "~6.0.3"
+  }
+}

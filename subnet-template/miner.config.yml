@@ -1,7 +1,8 @@
-netuid: 2
+# Reference only — minerv1.py does not load this YAML; pass CLI flags.
+netuid: 573
 subtensor:
-  chain_endpoint: ws://127.0.0.1:9945
-  network: local
+  chain_endpoint: ""
+  network: test
 wallet:
   name: test-miner
   hotkey: default

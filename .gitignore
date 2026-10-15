@@ -1,0 +1,44 @@
+# Secrets & local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+**/coldkey*
+**/hotkey*
+deployment.exports.sh
+
+# Local Hardhat / EVM deploy outputs (regenerate with deploy_access_registry.py)
+key-generation/deployment.json
+key-generation/cache/
+key-generation/artifacts/
+key-generation/typechain-types/
+
+# Local EHR ciphertext demo store
+key-generation/.ehr_local/
+.ehr_local/
+
+# Node / Python junk
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.code-workspace
+
+# Misc local artifacts
+image.png
+*.log
