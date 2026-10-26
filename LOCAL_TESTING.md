@@ -226,3 +226,7 @@ Automated tests cover the Supabase REST payload/byte decoding, pagination, metad
 ## Epic Sandbox connection (no record retrieval)
 
 Follow [backend/EPIC_OAUTH.md](backend/EPIC_OAUTH.md) to configure the public SMART app and exact callback URL. With the backend and frontend running, sign in to MediLink and visit `/external-import`. Connect to Epic Sandbox and authorize a patient account. The callback displays token-exchange success and transfer authorization readiness. Tokens stay encrypted on the backend; no EHR data is fetched. Use the same frontend origin throughout (do not mix `localhost` and `127.0.0.1`).
+
+## Hippius document storage
+
+The backend supports encrypted Hippius uploads with Supabase pointers. Apply the migration and follow [backend/HIPPIUS_STORAGE.md](backend/HIPPIUS_STORAGE.md) before enabling `DOCUMENT_STORAGE_BACKEND=hippius`. The standalone `check_hippius.py` checks a synthetic encrypted round trip and removes its temporary cloud bucket. Existing documents are not automatically migrated.

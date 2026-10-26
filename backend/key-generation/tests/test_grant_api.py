@@ -483,3 +483,22 @@ def test_old_database_is_not_reused_or_deleted(tmp_path):
     create_app(dev=True, data_dir=tmp_path, master_key=b"k" * 32)
     assert old.read_bytes() == b"old pair data"
     assert (tmp_path / "registry-grants.sqlite3").exists()
+
+
+@pytest.mark.parametrize('origin', ['http://localhost:5173', 'http://127.0.0.1:5173',
+                                   'http://localhost:8080', 'http://127.0.0.1:8080'])
+def test_local_frontend_cors_preflight(tmp_path, monkeypatch, origin):
+    monkeypatch.delenv('FRONTEND_ORIGINS', raising=False)
+    client = create_app(dev=True, data_dir=tmp_path, master_key=b'k'*32).test_client()
+    result = client.options('/api/records', headers={'Origin': origin,
+        'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization,content-type'})
+    assert result.status_code == 204
+    assert result.headers['Access-Control-Allow-Origin'] == origin
+    assert client.options('/api/records', headers={'Origin': 'https://untrusted.example'}).status_code == 403
+
+
+def test_explicit_frontend_origins_override_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv('FRONTEND_ORIGINS', ' https://app.example , ')
+    client = create_app(dev=True, data_dir=tmp_path, master_key=b'k'*32).test_client()
+    assert client.options('/api/records', headers={'Origin': 'https://app.example'}).status_code == 204
+    assert client.options('/api/records', headers={'Origin': 'http://localhost:8080'}).status_code == 403

@@ -80,7 +80,12 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     supabase_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     if not dev and (not supabase_url or not supabase_key):
         raise RuntimeError("Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY")
-    allowed_origins = set(os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","))
+    # Local Vite/Lovable setups use either 5173 or 8080. Keep an explicit
+    # allowlist; deployed frontends can override it with FRONTEND_ORIGINS.
+    allowed_origins = {origin.strip() for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080",
+    ).split(",") if origin.strip()}
     db_path = directory / "registry-grants.sqlite3"
     lock = RLock()
 
@@ -144,7 +149,14 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     epic_oauth = EpicOAuth(db_path, master_key, os.getenv("EPIC_CLIENT_ID", "").strip(),
                            os.getenv("EPIC_REDIRECT_URI", "").strip())
 
-    documents = DemoDocumentStore() if dev else SupabaseDocumentStore(
+    document_store_class = SupabaseDocumentStore
+    storage_backend = os.getenv("DOCUMENT_STORAGE_BACKEND", "supabase")
+    if not dev and storage_backend == "hippius":
+        from hippius_storage import HippiusDocumentStore
+        document_store_class = HippiusDocumentStore
+    elif not dev and storage_backend != "supabase":
+        raise ValueError("Unknown DOCUMENT_STORAGE_BACKEND")
+    documents = DemoDocumentStore() if dev else document_store_class(
         supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
 
 

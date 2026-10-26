@@ -76,3 +76,7 @@ The TypeScript admin/auth/cron helpers currently have no application callers; th
 ## Epic import authorization
 
 `key-generation/epic_oauth.py` implements account-bound state/PKCE, callback completion, server-side token exchange, and encrypted connection persistence. The frontend displays verified token-exchange success and transfer authorization readiness. No EHR data is fetched. See [EPIC_OAUTH.md](EPIC_OAUTH.md) for app registration, local testing, API contracts and limitations.
+
+## Hippius encrypted document storage
+
+See [HIPPIUS_STORAGE.md](HIPPIUS_STORAGE.md) for the new private per-patient buckets, encrypted file content, Supabase pointer migration, configuration and test commands. Enable with `DOCUMENT_STORAGE_BACKEND=hippius` only after applying the storage migration. Existing Supabase files remain readable; Epic resource retrieval is still disabled.

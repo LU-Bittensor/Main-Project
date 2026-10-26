@@ -42,8 +42,7 @@ BEGIN
     VALUES (owner, 'Attachment 1', 'Document', 'ehr_import', resource, conn, job, catalog, '1'),
            (owner, 'Attachment 2', 'Document', 'ehr_import', resource, conn, job, catalog, '2');
   BEGIN
-    INSERT INTO public.records(owner_id, name, kind, origin, ehr_resource_id, ehr_connection_id, import_job_id)
-      VALUES (other_owner, 'Wrong owner', 'Patient', 'ehr_import', resource, conn, job);
+    UPDATE public.records SET owner_id = other_owner WHERE id = catalog;
     RAISE EXCEPTION 'Cross-account record accepted';
   EXCEPTION WHEN foreign_key_violation THEN NULL; END;
   INSERT INTO public.records(owner_id, name, kind) VALUES (owner, 'Existing upload path', 'Document');
