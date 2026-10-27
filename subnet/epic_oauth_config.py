@@ -158,7 +158,7 @@ def validate_epic_oauth_config(
     missing_fields = [
         field_name
         for field_name in REQUIRED_FIELDS
-        if not str(config.get(field_name, "")).strip()
+        if not isinstance(config.get(field_name), str) or not config[field_name].strip()
     ]
     if missing_fields:
         raise EpicOAuthConfigError(

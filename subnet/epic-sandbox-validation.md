@@ -58,9 +58,9 @@ The command proves that an Epic-style FHIR bundle can:
 }
 ```
 
-## Follow-Up For Live OAuth
+## Live OAuth Fetch Layer
 
-Once the Epic sandbox app is available, add a small fetch layer in front of this command:
+`epic_sandbox_live.py` now provides the fetch layer in front of this command. See [the live integration runbook](epic-live-integration.md) for setup and evidence. Registered-client live validation still requires the non-production app configuration:
 
 ```text
 Epic OAuth2 token -> FHIR resource requests -> Bundle JSON -> epic_sandbox_validate.py

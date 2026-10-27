@@ -45,3 +45,11 @@ subnet/
 ## License
 
 See repository root / project license terms.
+
+## Epic sandbox API integration
+
+Start with the [Epic setup guide](epic-setup.md). `epic_sandbox_setup.py` configures and checks the app, `epic_sandbox_live.py --profile expanded` retrieves Patient, Observation, Condition, MedicationRequest, and Encounter resources, and `epic_sandbox_report.py` verifies stored data and summarizes runs. The OAuth client uses PKCE and the existing ingestion/storage/digest pipeline.
+
+See [implementation evidence and task status](epic-live-integration.md) and [the three tasks for October 19–25](epic-next-week-tasks.md). Registered-client live validation is complete for the defined sandbox scope. The offline demo and mocked tests are labeled separately from live API evidence.
+
+Epic sandbox validation completed across three distinct test patients on October 23, 2026. See [live results and repeatable demonstration](epic-live-results.md) for counts, saved evidence, and the reviewed coverage limitations.

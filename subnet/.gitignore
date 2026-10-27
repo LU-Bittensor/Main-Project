@@ -6,3 +6,6 @@ storage/ehr_records/*.json
 storage/ehr_records/*.tmp
 epic_sandbox.config.yml
 miner_store_v1.db
+
+# Local outputs from authenticated Epic sandbox runs
+storage/epic_sandbox_runs/

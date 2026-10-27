@@ -1,0 +1,38 @@
+{
+  "run": "20261023T212911Z-29e70786",
+  "completedAt": "2026-10-23T21:31:30.827260+00:00",
+  "dataSource": "authenticated-fhir-api",
+  "oauthValidated": true,
+  "status": "passed_with_warnings",
+  "rawResourceCounts": {
+    "Patient": 1,
+    "Observation": 257
+  },
+  "queries": [
+    {
+      "category": "vital-signs",
+      "pages": 1,
+      "resourceType": "Observation",
+      "returnedEntries": 257
+    }
+  ],
+  "digestReverified": true,
+  "mappingReconciliation": {
+    "status": "passed",
+    "mismatchCount": 0,
+    "warningCount": 0
+  },
+  "apiWarnings": [
+    {
+      "category": "vital-signs",
+      "resourceType": "Observation",
+      "severity": "warning"
+    }
+  ],
+  "warningReviewComplete": false,
+  "limitations": [
+    "The first runner version retained warning severity but not its diagnostic details; a new run is needed for investigation.",
+    "Mapped counts and selected fields were checked; this is not a full-chart or clinical validation."
+  ],
+  "localRunDirectory": "storage/epic_sandbox_runs/20261023T212911Z-29e70786"
+}

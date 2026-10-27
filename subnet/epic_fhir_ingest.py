@@ -32,10 +32,10 @@ def _coding_text(value: dict[str, Any] | None) -> str | None:
         return str(value["text"])
 
     coding = value.get("coding")
-    if isinstance(coding, list) and coding:
-        first_coding = coding[0]
-        if isinstance(first_coding, dict):
-            return first_coding.get("display") or first_coding.get("code")
+    if isinstance(coding, list):
+        for item in coding:
+            if isinstance(item, dict) and (item.get("display") or item.get("code")):
+                return item.get("display") or item.get("code")
 
     return None
 
@@ -94,13 +94,15 @@ def _blood_pressure_value(resource: dict[str, Any]) -> tuple[str | None, str | N
 
     for component in resource.get("component", []):
         code = (_coding_text(component.get("code")) or "").lower()
+        loinc_codes = {coding.get("code") for coding in component.get("code", {}).get("coding", [])
+                       if isinstance(coding, dict) and coding.get("system") == "http://loinc.org"}
         quantity = component.get("valueQuantity") or {}
         value, component_unit = _quantity_value(quantity)
         unit = unit or component_unit
 
-        if "systolic" in code:
+        if "8480-6" in loinc_codes or "systolic" in code:
             systolic = value
-        elif "diastolic" in code:
+        elif "8462-4" in loinc_codes or "diastolic" in code:
             diastolic = value
 
     if systolic and diastolic:
@@ -113,12 +115,18 @@ def map_observation(resource: dict[str, Any]) -> dict[str, str | None]:
     value = None
     unit = None
 
-    if resource.get("component"):
-        value, unit = _blood_pressure_value(resource)
-    elif "valueQuantity" in resource:
+    if "valueQuantity" in resource:
         value, unit = _quantity_value(resource["valueQuantity"])
     elif "valueString" in resource:
         value = resource["valueString"]
+    elif "valueCodeableConcept" in resource:
+        value = _coding_text(resource["valueCodeableConcept"])
+    elif "valueBoolean" in resource:
+        value = str(resource["valueBoolean"]).lower()
+    elif "valueInteger" in resource:
+        value = str(resource["valueInteger"])
+    elif resource.get("component"):
+        value, unit = _blood_pressure_value(resource)
 
     return {
         "name": _coding_text(resource.get("code")) or "Unknown observation",
@@ -147,6 +155,7 @@ def map_medication_request(resource: dict[str, Any]) -> dict[str, str | None]:
     return {
         "name": (
             _coding_text(resource.get("medicationCodeableConcept"))
+            or (resource.get("medicationReference") or {}).get("display")
             or "Unknown medication"
         ),
         "status": resource.get("status"),

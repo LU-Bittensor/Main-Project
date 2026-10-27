@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-10-18T23:14:59.078558+00:00",
+  "environment": "epic-public-sandbox",
+  "request": {
+    "method": "GET",
+    "url": "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4/.well-known/smart-configuration",
+    "authenticated": false,
+    "clientIdProvided": false
+  },
+  "httpStatusLine": "HTTP/1.1 200 OK",
+  "authorizationEndpoint": "https://fhir.epic.com/interconnect-fhir-oauth/oauth2/authorize",
+  "tokenEndpoint": "https://fhir.epic.com/interconnect-fhir-oauth/oauth2/token",
+  "pkceMethods": [
+    "S256"
+  ],
+  "capabilities": [
+    "launch-ehr",
+    "launch-standalone",
+    "client-public",
+    "client-confidential-symmetric",
+    "client-confidential-asymmetric",
+    "context-banner",
+    "context-style",
+    "context-ehr-patient",
+    "context-ehr-encounter",
+    "context-standalone-patient",
+    "permission-offline",
+    "permission-patient",
+    "permission-user",
+    "permission-v1",
+    "permission-v2",
+    "sso-openid-connect",
+    "authorize-post"
+  ],
+  "proves": "Public sandbox discovery is reachable and advertises these capabilities.",
+  "doesNotProve": [
+    "Registered-client OAuth login",
+    "Authorization-code exchange",
+    "Authenticated patient/resource retrieval",
+    "Customer production access"
+  ]
+}

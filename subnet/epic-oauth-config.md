@@ -1,5 +1,7 @@
 # Epic Sandbox OAuth Config
 
+For the current registration, setup checker, and live run commands, start with [Epic setup](epic-setup.md). The notes below describe the original configuration module.
+
 Main-231 adds the configuration layer needed before live Epic sandbox ingestion can run.
 
 ## Purpose
@@ -24,7 +26,7 @@ The local `epic_sandbox.config.yml` file is ignored by git.
 
 ## Validate Config
 
-From `subnet-template`, run:
+From `subnet`, run:
 
 ```sh
 python3 epic_oauth_config.py --config epic_sandbox.config.yml
@@ -74,3 +76,7 @@ epic_sandbox_validate.py
 ```
 
 The config loader prepares the OAuth side without changing the ingestion, storage, or digest verification code.
+
+## Run the standalone OAuth flow
+
+The new `epic_sandbox_live.py` runner handles state validation, PKCE, the callback, token exchange, and authenticated Patient/Observation retrieval. See [Epic live integration](epic-live-integration.md) for compatible app registration, commands, and remaining live validation. The authorization URL printed by this configuration utility alone does not retain a state/PKCE session; use the runner for an end-to-end attempt.

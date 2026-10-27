@@ -1,0 +1,179 @@
+{
+  "date": "2026-10-23",
+  "environment": "epic-public-sandbox",
+  "dataSource": "authenticated-fhir-api",
+  "verifiedDistinctPatientCount": 3,
+  "threePatientBaselineReady": true,
+  "expandedRetrievalObserved": true,
+  "runs": [
+    {
+      "patientLabel": "Test patient 1",
+      "run": "20261023T213314Z-25d89d54",
+      "completedAt": "2026-10-23T21:35:44.978829+00:00",
+      "status": "passed_with_warnings",
+      "resourceCounts": {
+        "Patient": 1,
+        "Observation": 259,
+        "Condition": 1,
+        "MedicationRequest": 1,
+        "Encounter": 5
+      },
+      "queries": [
+        {
+          "category": "vital-signs",
+          "pages": 1,
+          "resourceType": "Observation",
+          "returnedEntries": 257
+        },
+        {
+          "category": "laboratory",
+          "pages": 1,
+          "resourceType": "Observation",
+          "returnedEntries": 2
+        },
+        {
+          "category": "problem-list-item",
+          "pages": 1,
+          "resourceType": "Condition",
+          "returnedEntries": 1
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "MedicationRequest",
+          "returnedEntries": 1
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "Encounter",
+          "returnedEntries": 5
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "mappingWarningCount": 0,
+      "apiWarningReview": {
+        "status": "reviewed_expected_notices",
+        "coverageNoticeCount": 5,
+        "emptyResultNoticeCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "patientLabel": "Test patient 2",
+      "run": "20261023T213651Z-ef1499de",
+      "completedAt": "2026-10-23T21:37:21.734272+00:00",
+      "status": "passed_with_warnings",
+      "resourceCounts": {
+        "Patient": 1,
+        "Condition": 7,
+        "MedicationRequest": 9
+      },
+      "queries": [
+        {
+          "category": "vital-signs",
+          "pages": 1,
+          "resourceType": "Observation",
+          "returnedEntries": 0
+        },
+        {
+          "category": "laboratory",
+          "pages": 1,
+          "resourceType": "Observation",
+          "returnedEntries": 0
+        },
+        {
+          "category": "problem-list-item",
+          "pages": 1,
+          "resourceType": "Condition",
+          "returnedEntries": 7
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "MedicationRequest",
+          "returnedEntries": 9
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "Encounter",
+          "returnedEntries": 0
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "mappingWarningCount": 0,
+      "apiWarningReview": {
+        "status": "reviewed_expected_notices",
+        "coverageNoticeCount": 5,
+        "emptyResultNoticeCount": 3,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "patientLabel": "Test patient 3",
+      "run": "20261023T213757Z-003737f6",
+      "completedAt": "2026-10-23T21:40:12.823878+00:00",
+      "status": "passed_with_warnings",
+      "resourceCounts": {
+        "Patient": 1,
+        "Observation": 1617,
+        "Condition": 1,
+        "MedicationRequest": 1
+      },
+      "queries": [
+        {
+          "category": "vital-signs",
+          "pages": 2,
+          "resourceType": "Observation",
+          "returnedEntries": 1617
+        },
+        {
+          "category": "laboratory",
+          "pages": 1,
+          "resourceType": "Observation",
+          "returnedEntries": 0
+        },
+        {
+          "category": "problem-list-item",
+          "pages": 1,
+          "resourceType": "Condition",
+          "returnedEntries": 1
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "MedicationRequest",
+          "returnedEntries": 1
+        },
+        {
+          "category": null,
+          "pages": 1,
+          "resourceType": "Encounter",
+          "returnedEntries": 0
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "mappingWarningCount": 0,
+      "apiWarningReview": {
+        "status": "reviewed_expected_notices",
+        "coverageNoticeCount": 6,
+        "emptyResultNoticeCount": 2,
+        "unresolvedCount": 0
+      }
+    }
+  ],
+  "limitations": [
+    "Epic 4119 restricts returned content to information available to the authorized user; this is not full-chart coverage.",
+    "Epic 4101 empty-result notices were checked against matching zero-result searches.",
+    "Original reports retain passed_with_warnings. Unrecognized or unresolved warnings remain excluded.",
+    "The initial baseline run lacked warning details and remains excluded; its later expanded replacement passed review.",
+    "Reconciliation checks mapped counts and selected fields, not clinical meaning or every FHIR field."
+  ]
+}

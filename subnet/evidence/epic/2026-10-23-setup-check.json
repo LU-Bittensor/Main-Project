@@ -1,0 +1,14 @@
+{
+  "profile": "expanded",
+  "checks": [
+    "Public sandbox discovery is reachable and advertises expected endpoints and PKCE."
+  ],
+  "blockers": [
+    "Epic OAuth config requires a real non-production client_id."
+  ],
+  "liveOAuthValidated": false,
+  "discoveryClientIdProvided": false,
+  "status": "blocked",
+  "nextStep": "Complete browser authorization to validate the registered app and enabled APIs.",
+  "checkedAt": "2026-10-23T21:23:53.009680+00:00"
+}

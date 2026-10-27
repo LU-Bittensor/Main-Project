@@ -1,0 +1,15 @@
+{
+  "profile": "baseline",
+  "checks": [
+    "Local config and requested profile are valid.",
+    "Callback port is available now.",
+    "Public sandbox discovery is reachable and advertises expected endpoints and PKCE."
+  ],
+  "blockers": [],
+  "liveOAuthValidated": false,
+  "redirectUri": "http://localhost:8080/callback",
+  "discoveryClientIdProvided": true,
+  "status": "ready_for_login",
+  "nextStep": "Complete browser authorization to validate the registered app and enabled APIs.",
+  "checkedAt": "2026-10-23T21:28:54.247749+00:00"
+}
