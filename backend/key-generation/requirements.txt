@@ -4,3 +4,5 @@ requests>=2.32,<3
 web3>=7,<9
 pytest>=8,<10
 boto3>=1.36,<2
+py-solc-x>=2.0.0,<3
+eth-utils>=5,<6

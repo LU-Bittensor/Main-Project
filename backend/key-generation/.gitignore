@@ -16,6 +16,7 @@ testContractDeployment/cache/
 
 deployment.json
 deployment.exports.sh
+faucet.deployment.json
 
 artifacts/
 cache/

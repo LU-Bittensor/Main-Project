@@ -68,7 +68,7 @@ A reverted attempt does not emit AccessDenied. AccessGranted confirms this contr
 
 For Supabase, set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and a persistent 32-byte hex `GRANT_MASTER_KEY`. Start without `--dev`. Set `RPC_URL`, `OWNER_PRIVATE_KEY`, and `--chain` for registry integration. `REGISTRY_ADDRESS` is optional; use the same persistent API store to reuse deployments and credentials. Do not run multiple workers or independent stores against the same grant pairs.
 
-`FUND_LOCAL_WALLETS=1` explicitly funds recipient wallets using Hardhat's test RPC, only on chain ID 31337; it now supports both fixture and real Supabase identities. On other chains disable it and fund operator/recipient wallets yourself. The supplied launcher uses public Hardhat credentials and is for local blockchain testing only. For another network use manual configuration without `--auto-data-dir` and a separate `GRANT_DATA_DIR`.
+`FUND_LOCAL_WALLETS=1` explicitly funds **custodial** recipient wallets using Hardhat's test RPC, only on chain ID 31337; it now supports both fixture and real Supabase identities. For **vault (non-custodial) enroll**, prefer the MediLink faucet: deploy with `python deploy_medilink_faucet.py`, fund the contract, set `FAUCET_ADDRESS` (launchers auto-read `faucet.deployment.json` when present). See [`backend/key-generation/markdowns/Faucet.md`](backend/key-generation/markdowns/Faucet.md). On other chains disable `FUND_LOCAL_WALLETS` and fund operator/recipient wallets yourself. The supplied launcher uses public Hardhat credentials and is for local blockchain testing only. For another network use manual configuration without `--auto-data-dir` and a separate `GRANT_DATA_DIR`.
 
 For API/DH testing without any blockchain, omit `--chain` and use a separate data directory. Off-chain mode cannot verify or revoke on-chain permissions.
 
@@ -81,7 +81,7 @@ The frontend needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `VI
 From `backend/key-generation`:
 
 ```sh
-.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py -q
+.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py tests/test_faucet_enroll.py -q
 ```
 
 For the integration test, start a separate compiled Hardhat node on port 18545, then run:
@@ -165,7 +165,7 @@ cd health-locker-guard && npm test
 cd Main-Project/backend/key-generation && pytest tests/test_grant_api.py -k vault
 ```
 
-Grant/access signing remains custodial under `GRANT_MASTER_KEY` for now; the vault holds keys for the next non-custodial cutover.
+Vault enroll publishes the browser EVM/`x25519` public keys via `POST /api/enroll` (`evmAddress`, `x25519PublicKeyB64`) and tops up gas through `POST /api/faucet/ensure` when `FAUCET_ADDRESS` is set. Legacy empty-body enroll still creates a custodial wallet for off-registry `/grants` demos. Server-side AccessRegistry challenge signing runs only when a custodial `wallet_key` exists; vault users sign with the unlocked browser key.
 
 ### Account persistence verification (October 13, 2026)
 

@@ -6,19 +6,23 @@ This directory contains the Python API, blockchain tooling, Supabase database as
 
 | Path | Responsibility |
 | --- | --- |
-| `key-generation/grant_api.py` | Authenticated grant, record, document, and vault API |
+| `key-generation/grant_api.py` | Authenticated grant, record, document, vault, enroll, and faucet API |
+| `key-generation/faucet_client.py` | MediLinkFaucet balance check and operator drip |
+| `key-generation/deploy_medilink_faucet.py` | Compile/deploy faucet; writes `faucet.deployment.json` |
 | `key-generation/documents.py` | Document contents and metadata in Supabase records |
 | `key-generation/chain_grants.py` | AccessRegistry blockchain adapter |
 | `key-generation/DHkey_share.py` | Key generation, encryption, and DH verification |
 | `key-generation/migrate_documents_to_supabase.py` | Legacy local-document migration |
 | `key-generation/operation-flow/` | API compatibility entry point and command-line examples |
-| `key-generation/tests/` | Python API, document, and chain integration tests |
+| `key-generation/tests/` | Python API, document, faucet, and chain integration tests |
 | `key-generation/testContractDeployment/` | Hardhat configuration, deployment scripts, and Solidity tests |
+| `key-generation/markdowns/Faucet.md` | Local faucet deploy and API wiring |
 | `contracts/AccessRegistry.sol` | Authoritative registry contract; Hardhat copies it into its compilation directory |
+| `contracts/MediLinkFaucet.sol` | Ops-funded gas faucet for vault H160s |
 | `supabase/` | Supabase configuration, SQL migrations/tests, and shared schema types |
 | `src/integrations/supabase/` | Server-only Supabase admin, request-authentication, and cron helpers |
 
-The complete former `Main-Project/key-generation` project now lives at `Main-Project/backend/key-generation`. Its internal layout is preserved, including legacy `DataAccessControl.sol` examples and the existing Node dependency manifests. The TypeScript package in this directory and the Hardhat package are separate projects.
+The complete former `Main-Project/key-generation` project now lives at `Main-Project/backend/key-generation`. Faucet and non-custodial vault enroll are part of `grant_api.py` (single process on port 5001)—do not run a separate `wallet_api`. A leftover untracked `Main-Project/key-generation/` tree (if present) is obsolete. The TypeScript package in this directory and the Hardhat package are separate projects.
 
 ## Start locally
 
@@ -54,7 +58,7 @@ Restart existing API processes from the new path after stopping them. Update any
 
 ```sh
 # From Main-Project/backend/key-generation
-.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py -q
+.venv/bin/python -m pytest tests/test_grant_api.py tests/test_documents.py tests/test_faucet_enroll.py -q
 
 # From Main-Project/backend/key-generation/testContractDeployment
 npx hardhat compile

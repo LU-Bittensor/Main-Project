@@ -19,4 +19,10 @@ export GRANT_MASTER_KEY="$(.venv/bin/python -c 'import os, pathlib; print((pathl
 export RPC_URL="${RPC_URL:-http://127.0.0.1:8545}"
 export OWNER_PRIVATE_KEY="${OWNER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
 export FUND_LOCAL_WALLETS="${FUND_LOCAL_WALLETS:-1}"
+# Optional: set FAUCET_ADDRESS after deploy_medilink_faucet.py (see markdowns/Faucet.md).
+# Operator key defaults to OWNER_PRIVATE_KEY when FAUCET_OPERATOR_PRIVATE_KEY is unset.
+if [ -f faucet.deployment.json ] && [ -z "${FAUCET_ADDRESS:-}" ]; then
+  FAUCET_ADDRESS="$(.venv/bin/python -c 'import json; print(json.load(open("faucet.deployment.json")).get("address",""))')"
+  export FAUCET_ADDRESS
+fi
 exec .venv/bin/python grant_api.py --chain --auto-data-dir

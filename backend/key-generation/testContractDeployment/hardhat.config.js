@@ -1,8 +1,14 @@
-// Keep the compiled registry identical to the authoritative backend source.
+// Keep compiled contracts identical to the authoritative backend sources.
 const fs = require("fs");
 const path = require("path");
-fs.copyFileSync(path.join(__dirname, "../../contracts/AccessRegistry.sol"),
-                path.join(__dirname, "contracts/AccessRegistry.sol"));
+const contractsSrc = path.join(__dirname, "../../contracts");
+const contractsDst = path.join(__dirname, "contracts");
+for (const name of ["AccessRegistry.sol", "MediLinkFaucet.sol"]) {
+  const src = path.join(contractsSrc, name);
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, path.join(contractsDst, name));
+  }
+}
 require("@nomicfoundation/hardhat-toolbox");
 
 /** @type import('hardhat/config').HardhatUserConfig */

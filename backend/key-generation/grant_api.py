@@ -1,5 +1,6 @@
-"""Single-process custodial grant API. See LOCAL_TESTING.md for setup and limits."""
+"""Grant + vault + faucet API. See LOCAL_TESTING.md for setup and limits."""
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -13,7 +14,8 @@ import uuid
 
 import requests
 from eth_account import Account
-from flask import Flask, Response, g, jsonify, request, Response
+from eth_utils import is_address, to_checksum_address
+from flask import Flask, Response, g, jsonify, request
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 from epic_oauth import EpicOAuth, EpicOAuthError
@@ -30,6 +32,11 @@ from DHkey_share import (
     hippius_configured,
     hippius_object_exists,
 )
+
+try:
+    import faucet_client
+except ImportError:  # pragma: no cover
+    faucet_client = None  # type: ignore
 
 VAULT_OBJECT_NAME = "keystore.v1.json"
 VAULT_PRESIGN_TTL_S = 300
@@ -127,6 +134,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             db().execute("ALTER TABLE grants ADD COLUMN revoke_tx TEXT")
         if "registry_revoked" not in columns:
             db().execute("ALTER TABLE grants ADD COLUMN registry_revoked INTEGER NOT NULL DEFAULT 0")
+        user_columns = {row["name"] for row in db().execute("PRAGMA table_info(users)")}
+        if "x25519_public_key_b64" not in user_columns:
+            db().execute("ALTER TABLE users ADD COLUMN x25519_public_key_b64 TEXT")
         # Do not silently reuse off-chain permissions against a different chain or master key.
         environment = json.dumps({"protocol": "dh-registry-v1", "dev": dev,
                                   "auth_project": None if dev else supabase_url,
@@ -160,15 +170,40 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
 
 
-    def enroll(uid, name):
+    def enroll(uid, name, *, wallet=None, x25519_public_key_b64=None):
+        """Ensure a user row exists. Optional wallet = vault public EVM address (non-custodial)."""
         with lock:
-            if not db().execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone():
+            row = db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+            if row is None:
                 private, public = generate_key_pair()
-                # Separate custodial EVM key signs this recipient's challenge transactions.
-                wallet = Account.create()
-                db().execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)",
-                             (uid, name, encrypt_secret(master_key, private, "user:" + uid), public,
-                              wallet.address, encrypt_secret(master_key, bytes(wallet.key), "wallet:" + uid)))
+                if wallet:
+                    wallet_addr = to_checksum_address(wallet)
+                    # Empty wallet_key: EVM signing stays in the browser vault.
+                    wallet_key = b""
+                else:
+                    account = Account.create()
+                    wallet_addr = account.address
+                    wallet_key = encrypt_secret(master_key, bytes(account.key), "wallet:" + uid)
+                db().execute(
+                    "INSERT INTO users (id, name, private_key, public_key, wallet, wallet_key, x25519_public_key_b64) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (uid, name, encrypt_secret(master_key, private, "user:" + uid), public,
+                     wallet_addr, wallet_key, x25519_public_key_b64),
+                )
+                db().commit()
+                return
+            if wallet:
+                wallet_addr = to_checksum_address(wallet)
+                taken = db().execute(
+                    "SELECT id FROM users WHERE wallet=? AND id!=?", (wallet_addr, uid)
+                ).fetchone()
+                if taken:
+                    raise APIError("evmAddress already enrolled to another account", 409)
+                db().execute(
+                    "UPDATE users SET name=?, wallet=?, wallet_key=?, "
+                    "x25519_public_key_b64=COALESCE(?, x25519_public_key_b64) WHERE id=?",
+                    (name, wallet_addr, b"", x25519_public_key_b64, uid),
+                )
                 db().commit()
 
     if dev:
@@ -207,6 +242,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         if request.method == "OPTIONS":
             return "", 204
         if request.path == "/api/health":
+            return None
+        if request.path == "/api/faucet/status":
             return None
         # Local vault object uses a short-lived query token (no Bearer).
         if request.path == "/api/vault/local-object":
@@ -419,7 +456,20 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     @app.get("/api/health")
     def health():
-        return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-registry-v1", registry_address=setting("registry_address"))
+        faucet_ok = False
+        try:
+            if faucet_client and os.getenv("FAUCET_ADDRESS"):
+                faucet_client.resolve_faucet_address()
+                faucet_ok = True
+        except Exception:
+            faucet_ok = False
+        return jsonify(
+            mode="local-demo" if dev else "supabase",
+            chain=chain is not None,
+            faucet=faucet_ok,
+            protocol="dh-registry-v1",
+            registry_address=setting("registry_address"),
+        )
 
     @app.post("/api/external-import/epic/authorize")
     def authorize_epic():
@@ -453,15 +503,109 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         except EpicOAuthError as error:
             raise APIError(str(error), 400) from error
 
+    def user_public_x25519(row) -> str | None:
+        if row["x25519_public_key_b64"]:
+            return row["x25519_public_key_b64"]
+        if row["public_key"]:
+            return base64.b64encode(bytes(row["public_key"])).decode("ascii")
+        return None
+
     @app.post("/api/enroll")
     def enroll_self():
-        enroll(g.uid, g.name)
-        wallet = db().execute("SELECT wallet FROM users WHERE id=?", (g.uid,)).fetchone()[0]
-        return jsonify(id=g.uid, name=g.name, wallet=wallet)
+        body = request.get_json(silent=True) or {}
+        wallet = (body.get("evmAddress") or body.get("wallet") or "").strip()
+        x25519 = body.get("x25519PublicKeyB64") or body.get("x25519_public_key") or None
+        if isinstance(x25519, str):
+            x25519 = x25519.strip() or None
+
+        for banned in ("evmPrivateKeyHex", "private_key", "privateKey", "wallet_key"):
+            if banned in body:
+                raise APIError("Private keys must not be sent to the API", 400)
+
+        if not wallet:
+            # Idempotent read / custodial create for legacy AccessPanel fallback.
+            row = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+            if row is None:
+                enroll(g.uid, g.name)
+                row = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+            return jsonify(
+                id=row["id"],
+                name=row["name"],
+                wallet=row["wallet"],
+                x25519PublicKeyB64=user_public_x25519(row),
+                funded=None,
+            )
+
+        if not is_address(wallet):
+            raise APIError("Invalid evmAddress", 400)
+        wallet = to_checksum_address(wallet)
+        taken = db().execute(
+            "SELECT id FROM users WHERE wallet=? AND id!=?", (wallet, g.uid)
+        ).fetchone()
+        if taken:
+            raise APIError("evmAddress already enrolled to another account", 409)
+
+        enroll(g.uid, g.name, wallet=wallet, x25519_public_key_b64=x25519)
+        row = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+
+        funded = None
+        drip_info = None
+        if faucet_client and os.getenv("FAUCET_ADDRESS"):
+            try:
+                drip_info = faucet_client.ensure_funded(wallet)
+                funded = True
+            except Exception as exc:
+                app.logger.warning("ensure_funded failed: %s", type(exc).__name__)
+                funded = False
+
+        return jsonify(
+            id=row["id"],
+            name=row["name"],
+            wallet=row["wallet"],
+            x25519PublicKeyB64=user_public_x25519(row),
+            funded=funded,
+            faucet=drip_info,
+        )
 
     @app.get("/api/users")
     def users():
-        return jsonify([dict(row) for row in db().execute("SELECT id, name FROM users WHERE id != ? ORDER BY name", (g.uid,))])
+        rows = db().execute(
+            "SELECT id, name, wallet, public_key, x25519_public_key_b64 FROM users WHERE id != ? ORDER BY name",
+            (g.uid,),
+        ).fetchall()
+        return jsonify(
+            [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "wallet": row["wallet"],
+                    "x25519PublicKeyB64": user_public_x25519(row),
+                }
+                for row in rows
+            ]
+        )
+
+    @app.get("/api/faucet/status")
+    def faucet_status():
+        if not faucet_client:
+            raise APIError("Faucet client unavailable", 503)
+        try:
+            return jsonify(faucet_client.faucet_status())
+        except Exception as exc:
+            raise APIError(f"Faucet unavailable: {exc}", 503) from exc
+
+    @app.post("/api/faucet/ensure")
+    def faucet_ensure():
+        row = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+        if not row:
+            raise APIError("Enroll a vault wallet before requesting faucet funds", 400)
+        if not faucet_client or not os.getenv("FAUCET_ADDRESS"):
+            raise APIError("Faucet is not configured", 503)
+        try:
+            result = faucet_client.ensure_funded(row["wallet"])
+        except Exception as exc:
+            raise APIError(f"Could not fund wallet: {exc}", 503) from exc
+        return jsonify(result)
 
     @app.get("/api/records")
     def records():
@@ -611,11 +755,15 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             if chain:
                 if not chain.matches(row["contract_address"], *pair(row), derived):
                     raise APIError("Contract no longer matches this grant. Check for a chain reset.", 409)
-                wallet_key = decrypt_secret(master_key, peer["wallet_key"], "wallet:" + g.uid)
-                verification = chain.request_access(row["contract_address"], bytes.fromhex(row["identifier"]), derived, wallet_key)
-                if not verification["allowed"]:
-                    raise APIError("AccessDenied event received from contract", 403)
-                result.update(verification, chain_verified=True)
+                # Vault-enrolled users keep EVM keys client-side; skip custodial challenge.
+                if peer["wallet_key"]:
+                    wallet_key = decrypt_secret(master_key, peer["wallet_key"], "wallet:" + g.uid)
+                    verification = chain.request_access(
+                        row["contract_address"], bytes.fromhex(row["identifier"]), derived, wallet_key
+                    )
+                    if not verification["allowed"]:
+                        raise APIError("AccessDenied event received from contract", 403)
+                    result.update(verification, chain_verified=True)
             # No file is returned yet; this exercises authorization and the actual contract flow.
             return jsonify(result)
 
