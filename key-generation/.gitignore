@@ -6,9 +6,11 @@
 *.key
 deployment.exports.sh
 deployment.json
+faucet.deployment.json
 .grant-pairs-local/
 .grant-pairs-mine/
 .grant-pairs-data/
+.grant-wallets/
 
 # Demo / Hardhat local state
 .ehr_local/

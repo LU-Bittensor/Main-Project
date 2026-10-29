@@ -10,6 +10,8 @@ We combine on-chain access control, encrypted storage, and a Bittensor subnet so
 | --- | --- |
 | **`subnet/`** | Miner and validator logic for our Bittensor subnet — the network side of the project. |
 | **`markdowns/`** | Project notes and decision records: contract design, storage choices, and other context for contributors. |
-| **`key-generation/`** | Smart contract logic and related scripts (access registry, deployment, local tooling). |
+| **`key-generation/`** | Smart contract logic and related scripts (AccessRegistry, MediLink faucet, wallet enroll API, deployment tooling). |
 
 Start with the markdowns if you want the “why,” then dig into `key-generation` for contracts/scripts and `subnet` for miner/validator code.
+
+Vault wallets + gas faucet: [`key-generation/markdowns/Faucet.md`](key-generation/markdowns/Faucet.md).

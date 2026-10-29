@@ -7,13 +7,21 @@ Deploy one multi-grantee `AccessRegistry` to Subtensor EVM (or Hardhat), store c
 | File | Role |
 |---|---|
 | [`AccessRegistry.sol`](AccessRegistry.sol) | Multi-resource, multi-grantee access contract |
+| [`MediLinkFaucet.sol`](MediLinkFaucet.sol) | Ops-funded gas faucet for vault H160s |
 | [`deploy_access_registry.py`](deploy_access_registry.py) | Compile + deploy → `deployment.json` |
-| [`access_registry_client.py`](access_registry_client.py) | X25519 DH + register / grant / challenge / verify |
+| [`deploy_medilink_faucet.py`](deploy_medilink_faucet.py) | Deploy faucet → `FAUCET_ADDRESS` |
+| [`faucet_client.py`](faucet_client.py) | `ensure_funded` / drip helpers |
+| [`wallet_api.py`](wallet_api.py) | Enroll public vault keys + faucet HTTP API |
+| [`access_registry_client.py`](access_registry_client.py) | CLI/demo X25519 DH + register / grant / challenge / verify (env keys) |
 | [`ehr_hippius.py`](ehr_hippius.py) | Envelope encrypt, per-user wraps, store/unlock demo |
 | [`.env.example`](.env.example) | Env vars template (copy secrets locally; do not commit) |
 | [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md) | Concepts: SS58 TAO → EVM fund → deploy on chain 945 |
+| [`Faucet.md`](markdowns/Faucet.md) | Vault wallets + faucet operator drip |
 
-Docs: [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md), [`../Hippius_EHR_Storage.md`](../Hippius_EHR_Storage.md), [`../Contract_Logic.md`](../Contract_Logic.md), [`../subnet/markdowns/ARCHITECTURE.md`](../subnet/markdowns/ARCHITECTURE.md), [`../subnet/markdowns/OPERATOR_GUIDE.md`](../subnet/markdowns/OPERATOR_GUIDE.md)
+Docs: [`Faucet.md`](markdowns/Faucet.md), [`Subtensor_EVM_Deploy.md`](markdowns/Subtensor_EVM_Deploy.md), [`../markdowns/Hippius_EHR_Storage.md`](../markdowns/Hippius_EHR_Storage.md), [`../markdowns/Contract_Logic.md`](../markdowns/Contract_Logic.md), [`../subnet/markdowns/ARCHITECTURE.md`](../subnet/markdowns/ARCHITECTURE.md), [`../subnet/markdowns/OPERATOR_GUIDE.md`](../subnet/markdowns/OPERATOR_GUIDE.md)
+
+**Product path:** browser vault EVM key signs AccessRegistry; MediLink faucet tops up gas.  
+**CLI path:** `OWNER_PRIVATE_KEY` / `USER_PRIVATE_KEY` remain for ops demos only.
 
 ## 1. Install deps
 
@@ -36,7 +44,10 @@ python key-generation/deploy_access_registry.py
 This writes `key-generation/deployment.json` and `deployment.exports.sh`. Then:
 
 ```bash
+python key-generation/deploy_medilink_faucet.py
 source key-generation/deployment.exports.sh
+# Deposit ETH into FAUCET_ADDRESS (see markdowns/Faucet.md)
+python key-generation/wallet_api.py --dev --port 5001
 ```
 
 Or paste the printed `export CONTRACT_ADDRESS=...` lines. **Stale `CONTRACT_ADDRESS` after redeploy is the usual cause of `Transaction reverted without a reason string`.**
