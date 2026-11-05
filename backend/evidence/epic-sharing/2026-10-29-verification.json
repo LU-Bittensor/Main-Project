@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-29",
+  "feature": "immutable saved Epic import report sharing",
+  "automatedBackendTestsPassed": 93,
+  "frontendChecks": [
+    "typecheck passed",
+    "changed-file lint passed",
+    "production build passed"
+  ],
+  "liveChecks": {
+    "apiHealthy": true,
+    "realAccountAuthentication": true,
+    "blockchainVerification": false,
+    "ownerReportListed": true,
+    "ownerReportPreviewOpened": true,
+    "clinicalRecordsInPreview": 269,
+    "recipientSelected": false,
+    "grantSubmitted": false
+  },
+  "pending": [
+    "Recipient must sign in and open access ledger to enroll.",
+    "User-operated two-account grant, report delivery, and revoke confirmation."
+  ]
+}

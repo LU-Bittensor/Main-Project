@@ -223,9 +223,9 @@ Automated tests cover the Supabase REST payload/byte decoding, pagination, metad
 
 `--dev` remains a synthetic demo: uploaded demo files live only in memory and disappear when its API stops. Use real-account mode for persistent Supabase uploads. Grant/wallet data still uses the existing local SQLite service store; only document storage changed.
 
-## Epic Sandbox connection (no record retrieval)
+## Epic Sandbox connection and import
 
-Follow [backend/EPIC_OAUTH.md](backend/EPIC_OAUTH.md) to configure the public SMART app and exact callback URL. With the backend and frontend running, sign in to MediLink and visit `/external-import`. Connect to Epic Sandbox and authorize a patient account. The callback displays token-exchange success and transfer authorization readiness. Tokens stay encrypted on the backend; no EHR data is fetched. Use the same frontend origin throughout (do not mix `localhost` and `127.0.0.1`).
+Follow [backend/EPIC_OAUTH.md](backend/EPIC_OAUTH.md) to configure the public SMART app and exact callback URL. With the backend and frontend running, sign in to MediLink and visit `/external-import`. Connect to Epic Sandbox and authorize a patient account. The callback displays connection readiness. Return to imports and choose **Import from Epic** to fetch the five supported resource types and verify the encrypted saved snapshot. Tokens stay on the backend. See [Epic import testing](backend/EPIC_IMPORT.md) for setup, acceptance checks, and storage boundaries. Use the same frontend origin throughout (do not mix `localhost` and `127.0.0.1`).
 
 ## Hippius document storage
 
