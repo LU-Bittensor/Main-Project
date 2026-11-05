@@ -7,6 +7,7 @@ import requests
 import secrets
 import sqlite3
 import time
+import re
 from urllib.parse import urlencode, urlsplit
 
 from DHkey_share import decrypt_secret, encrypt_secret
@@ -15,6 +16,8 @@ FHIR_BASE = 'https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4'
 AUTHORIZE_URL = 'https://fhir.epic.com/interconnect-fhir-oauth/oauth2/authorize'
 TOKEN_URL = 'https://fhir.epic.com/interconnect-fhir-oauth/oauth2/token'
 TTL_SECONDS = 600
+IMPORT_SCOPES = ('launch/patient', 'patient/Patient.read', 'patient/Observation.read',
+                 'patient/Condition.read', 'patient/MedicationRequest.read', 'patient/Encounter.read')
 
 
 class EpicOAuthError(Exception):
@@ -42,8 +45,8 @@ class EpicOAuth:
         with closing(sqlite3.connect(self.path)) as db:
             row = db.execute('SELECT payload FROM epic_connections WHERE user_id=?', (user_id,)).fetchone()
         if row is None:
-            return {'token_exchange_succeeded': False, 'ready_for_transfer': False,
-                    'reason': 'Connect your Epic Sandbox account to authorize a future transfer.'}
+            return {'token_exchange_succeeded': False, 'ready_for_transfer': False, 'ready_for_import': False,
+                    'reason': 'Connect your Epic Sandbox account to import records.'}
         saved = json.loads(decrypt_secret(self.key, row[0], 'epic-connection:' + user_id))
         scopes = saved['scope'].split()
         patient_scope = any(s in scopes for s in ('patient/Patient.read', 'patient/Patient.r', 'patient/Patient.rs'))
@@ -55,10 +58,26 @@ class EpicOAuth:
             reason = 'Epic did not grant the requested Patient read permission.'
         else:
             reason = ''
-        return {'token_exchange_succeeded': True, 'ready_for_transfer': not reason,
-                'reason': reason or 'Authorization is ready for a future Patient data transfer. No records have been retrieved.',
+        import_ready = not reason and all(scope in scopes or scope.replace('.read', '.rs') in scopes
+                                          for scope in IMPORT_SCOPES if scope != 'launch/patient')
+        return {'token_exchange_succeeded': True, 'ready_for_transfer': not reason, 'ready_for_import': import_ready,
+                'reason': reason or ('Ready to import your authorized sandbox records.' if import_ready else
+                                    'Reconnect to grant access to observations, conditions, medications, and encounters.'),
                 'expires_at': saved['expires_at'], 'scopes': scopes,
                 'patient_context_received': bool(saved.get('patient'))}
+
+    def for_import(self, user_id):
+        """Backend-only credentials for the authenticated account, never serialized to clients."""
+        if not self.status(user_id).get('ready_for_import'):
+            raise EpicOAuthError('Connect to Epic again before importing records; authorization is missing, expired, or incomplete.')
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute('SELECT payload FROM epic_connections WHERE user_id=?', (user_id,)).fetchone()
+        saved = json.loads(decrypt_secret(self.key, row[0], 'epic-connection:' + user_id))
+        if (saved.get('issuer') != FHIR_BASE or not isinstance(saved.get('patient'), str)
+                or not re.fullmatch(r'[A-Za-z0-9.-]+', saved['patient']) or saved['patient'] in ('.', '..')
+                or saved['expires_at'] <= time.time() + 5):
+            raise EpicOAuthError('Epic authorization cannot be used for this import. Connect again.')
+        return saved
 
     def complete(self, user_id, payload):
         if (not isinstance(payload, dict) or set(payload) - {'state', 'code', 'error'}
@@ -108,8 +127,7 @@ class EpicOAuth:
         verifier = secrets.token_urlsafe(64)
         state_hash = hashlib.sha256(state.encode()).hexdigest()
         now = int(time.time())
-        # Start with patient context and demographics; expand scopes with later imports.
-        scope = 'launch/patient patient/Patient.read'
+        scope = ' '.join(IMPORT_SCOPES)
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('DELETE FROM epic_oauth_pending WHERE expires_at <= ?', (now,))
             # Only the latest attempt for this account is valid.

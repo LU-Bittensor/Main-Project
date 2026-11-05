@@ -1,0 +1,198 @@
+{
+  "date": "2026-10-27",
+  "dataSource": "authenticated-epic-public-sandbox",
+  "frontendOrigin": "http://127.0.0.1:5173",
+  "verifiedInBrowser": [
+    "Signed-in import page showed connection ready",
+    "Import button started a background job",
+    "Completed record counts and saved-data verification were visible",
+    "Page refresh restored the same saved result",
+    "Repeat import completed with unchanged counts"
+  ],
+  "repeatCountsUnchanged": true,
+  "runs": [
+    {
+      "completedAt": "2026-10-27T23:19:49+00:00",
+      "status": "completed",
+      "counts": {
+        "Patient": 1,
+        "Observation": 255,
+        "Condition": 1,
+        "MedicationRequest": 1,
+        "Encounter": 5
+      },
+      "queries": [
+        {
+          "resourceType": "Observation",
+          "category": "vital-signs",
+          "pages": 1,
+          "returnedEntries": 253
+        },
+        {
+          "resourceType": "Observation",
+          "category": "laboratory",
+          "pages": 1,
+          "returnedEntries": 2
+        },
+        {
+          "resourceType": "Condition",
+          "category": "problem-list-item",
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "MedicationRequest",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "Encounter",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 5
+        }
+      ],
+      "apiNotices": [
+        {
+          "resource_type": "Observation",
+          "category": "vital-signs",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Observation",
+          "category": "laboratory",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Condition",
+          "category": "problem-list-item",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "MedicationRequest",
+          "category": null,
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Encounter",
+          "category": null,
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "mappingWarningCount": 0
+    },
+    {
+      "completedAt": "2026-10-27T23:20:46+00:00",
+      "status": "completed",
+      "counts": {
+        "Patient": 1,
+        "Observation": 255,
+        "Condition": 1,
+        "MedicationRequest": 1,
+        "Encounter": 5
+      },
+      "queries": [
+        {
+          "resourceType": "Observation",
+          "category": "vital-signs",
+          "pages": 1,
+          "returnedEntries": 253
+        },
+        {
+          "resourceType": "Observation",
+          "category": "laboratory",
+          "pages": 1,
+          "returnedEntries": 2
+        },
+        {
+          "resourceType": "Condition",
+          "category": "problem-list-item",
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "MedicationRequest",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "Encounter",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 5
+        }
+      ],
+      "apiNotices": [
+        {
+          "resource_type": "Observation",
+          "category": "vital-signs",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Observation",
+          "category": "laboratory",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Condition",
+          "category": "problem-list-item",
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "MedicationRequest",
+          "category": null,
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        },
+        {
+          "resource_type": "Encounter",
+          "category": null,
+          "severity": "warning",
+          "codes": [
+            "4119"
+          ]
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "mappingWarningCount": 0
+    }
+  ],
+  "boundaries": [
+    "One sandbox patient tested through the live frontend; account isolation and failures covered by automated tests.",
+    "Imported snapshots are encrypted in the local backend store, not cataloged in Supabase records or uploaded to Hippius.",
+    "Dashboard record display remains a separate integration task."
+  ]
+}

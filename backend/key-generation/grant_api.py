@@ -17,6 +17,8 @@ from flask import Flask, Response, g, jsonify, request, Response
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 from epic_oauth import EpicOAuth, EpicOAuthError
+from epic_import import EpicImports, EpicImportError
+from epic_share import ImportDocumentStore
 
 from DHkey_share import (
     HIPPIUS_BUCKET,
@@ -148,6 +150,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     db_path.chmod(0o600)
     epic_oauth = EpicOAuth(db_path, master_key, os.getenv("EPIC_CLIENT_ID", "").strip(),
                            os.getenv("EPIC_REDIRECT_URI", "").strip())
+    epic_imports = EpicImports(db_path, master_key, epic_oauth)
+    app.extensions['epic_imports'] = epic_imports
 
     document_store_class = SupabaseDocumentStore
     storage_backend = os.getenv("DOCUMENT_STORAGE_BACKEND", "supabase")
@@ -158,6 +162,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         raise ValueError("Unknown DOCUMENT_STORAGE_BACKEND")
     documents = DemoDocumentStore() if dev else document_store_class(
         supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+    uploads_configured = dev or bool(os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+    if not dev:
+        documents = ImportDocumentStore(documents, epic_imports, uploads_configured)
 
 
     def enroll(uid, name):
@@ -419,7 +426,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     @app.get("/api/health")
     def health():
-        return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-registry-v1", registry_address=setting("registry_address"))
+        return jsonify(mode="local-demo" if dev else "supabase", chain=chain is not None, protocol="dh-registry-v1", registry_address=setting("registry_address"), document_uploads_configured=uploads_configured)
 
     @app.post("/api/external-import/epic/authorize")
     def authorize_epic():
@@ -452,6 +459,34 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 return jsonify(epic_oauth.complete(g.uid, request.get_json(silent=True)))
         except EpicOAuthError as error:
             raise APIError(str(error), 400) from error
+
+    @app.route("/api/external-import/epic/import", methods=["GET", "POST"])
+    def import_epic():
+        if dev:
+            raise APIError("Sign in with a real MediLink account to import Epic records.", 403)
+        if request.args or (request.method == "POST" and request.get_json(silent=True) != {}):
+            raise APIError("This endpoint accepts no account, patient, or configuration overrides.")
+        try:
+            if request.method == "GET":
+                return jsonify(epic_imports.status(g.uid))
+            return jsonify(epic_imports.start(g.uid)), 202
+        except EpicOAuthError as error:
+            raise APIError(str(error), 409) from error
+        except EpicImportError as error:
+            raise APIError(str(error), 503) from error
+
+    @app.get("/api/external-import/epic/records")
+    def epic_records():
+        if dev:
+            raise APIError("Sign in with a real MediLink account to view imported Epic records.", 403)
+        if set(request.args) - {'category', 'page'} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+            raise APIError("Only category and page filters are accepted.")
+        try:
+            return jsonify(epic_imports.records(g.uid, request.args.get('category', 'all'), int(request.args.get('page', '1'))))
+        except ValueError:
+            raise APIError("Choose a valid record category and page.", 400) from None
+        except EpicImportError as error:
+            raise APIError(str(error), 503) from error
 
     @app.post("/api/enroll")
     def enroll_self():

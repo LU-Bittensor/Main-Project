@@ -1,0 +1,131 @@
+{
+  "date": "2026-10-28",
+  "dataSource": "authenticated-epic-public-sandbox-snapshot",
+  "dashboardCounts": {
+    "vital-signs": 260,
+    "laboratory": 2,
+    "conditions": 1,
+    "medications": 1,
+    "encounters": 5,
+    "totalClinicalRecords": 269
+  },
+  "browserChecks": {
+    "actualClinicalValuesVisible": true,
+    "sourceLabelsVisible": true,
+    "sourceDatesPreserved": true,
+    "allFiveCategoryFiltersPassed": true,
+    "paginationPassed": true,
+    "savedRecordsReadableAfterAuthorizationExpiry": true,
+    "expiredAuthorizationBlockedNewImport": true,
+    "signOutClearedClinicalData": true,
+    "signedOutDirectDashboardAccessBlocked": true,
+    "expiredAuthorizationReconnectPassed": true,
+    "sameSandboxPatientAfterReconnect": true,
+    "renewedImportDisplayedOnDashboard": true,
+    "repeatImportDashboardCountsUnchanged": true
+  },
+  "digestReverified": true,
+  "mappingStatus": "passed",
+  "automatedBackendTestsPassed": 85,
+  "pending": [
+    "Manual switch to a second real MediLink account (user expects access October 29)."
+  ],
+  "storageBoundary": "Records dashboard reads the current account encrypted local Epic snapshot; document storage, cloud catalog, Hippius, and sharing remain separate.",
+  "recoveredImportRuns": [
+    {
+      "completedAt": 1793208372,
+      "resourceCounts": {
+        "Patient": 1,
+        "Observation": 262,
+        "Condition": 1,
+        "MedicationRequest": 1,
+        "Encounter": 5
+      },
+      "queries": [
+        {
+          "resourceType": "Observation",
+          "category": "vital-signs",
+          "pages": 1,
+          "returnedEntries": 260
+        },
+        {
+          "resourceType": "Observation",
+          "category": "laboratory",
+          "pages": 1,
+          "returnedEntries": 2
+        },
+        {
+          "resourceType": "Condition",
+          "category": "problem-list-item",
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "MedicationRequest",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "Encounter",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 5
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "uniqueFetchedResources": 270,
+      "duplicateFetchedResources": 0
+    },
+    {
+      "completedAt": 1793208482,
+      "resourceCounts": {
+        "Patient": 1,
+        "Observation": 262,
+        "Condition": 1,
+        "MedicationRequest": 1,
+        "Encounter": 5
+      },
+      "queries": [
+        {
+          "resourceType": "Observation",
+          "category": "vital-signs",
+          "pages": 1,
+          "returnedEntries": 260
+        },
+        {
+          "resourceType": "Observation",
+          "category": "laboratory",
+          "pages": 1,
+          "returnedEntries": 2
+        },
+        {
+          "resourceType": "Condition",
+          "category": "problem-list-item",
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "MedicationRequest",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 1
+        },
+        {
+          "resourceType": "Encounter",
+          "category": null,
+          "pages": 1,
+          "returnedEntries": 5
+        }
+      ],
+      "digestReverified": true,
+      "mappingStatus": "passed",
+      "mappingMismatchCount": 0,
+      "uniqueFetchedResources": 270,
+      "duplicateFetchedResources": 0
+    }
+  ],
+  "newProviderResourcesSincePreviousDay": 7
+}
