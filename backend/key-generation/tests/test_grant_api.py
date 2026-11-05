@@ -502,3 +502,22 @@ def test_explicit_frontend_origins_override_defaults(tmp_path, monkeypatch):
     client = create_app(dev=True, data_dir=tmp_path, master_key=b'k'*32).test_client()
     assert client.options('/api/records', headers={'Origin': 'https://app.example'}).status_code == 204
     assert client.options('/api/records', headers={'Origin': 'http://localhost:8080'}).status_code == 403
+
+
+def test_registry_resolution_reuses_validated_deployment(tmp_path):
+    chain = FakeChain()
+    chain.chain_id = 31337
+    client = create_app(dev=True, data_dir=tmp_path, master_key=b'k'*32, chain=chain).test_client()
+    assert client.post('/api/registry/resolve').status_code == 401
+    first = client.post('/api/registry/resolve', headers=headers())
+    assert first.status_code == 200
+    assert first.json == {'address': 'address-1', 'chain_id': 31337}
+    assert client.post('/api/registry/resolve', headers=headers()).json == first.json
+    assert chain.deploy_count == 1
+    chain.contracts.clear()
+    assert client.post('/api/registry/resolve', headers=headers()).status_code == 503
+
+
+def test_registry_resolution_requires_blockchain(tmp_path):
+    client = create_app(dev=True, data_dir=tmp_path, master_key=b'k'*32).test_client()
+    assert client.post('/api/registry/resolve', headers=headers()).status_code == 503

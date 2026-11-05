@@ -39,6 +39,45 @@ class ChainGrants:
     def contract(self, address):
         return self.w3.eth.contract(address=Web3.to_checksum_address(address), abi=self.abi)
 
+    def wallet_resource(self, address, record_id, owner_wallet, recipient_wallet):
+        """Check wallet resource identity and current permission, never only logs."""
+        self.validate_registry(address)
+        cid = 'medilink:record:' + record_id
+        resource = Web3.keccak(text=cid)
+        contract = self.contract(address)
+        owner, data_hash, data_cid, exists = contract.functions.resources(resource).call()
+        valid = (exists and owner.lower() == owner_wallet.lower()
+                 and bytes(data_hash) == bytes(resource) and data_cid == cid)
+        return bool(valid and contract.functions.hasGrant(resource, recipient_wallet).call())
+
+    def wallet_shares(self, address, wallet):
+        """Rebuild local wallet share metadata from chain history, including revokes.
+
+        Bounded log ranges avoid single oversized RPC requests. A production
+        indexer can replace this scan without changing live download checks.
+        """
+        self.validate_registry(address)
+        contract = self.contract(address)
+        latest = {}
+        tip = self.w3.eth.block_number
+        for start in range(0, tip + 1, 2000):
+            for log in contract.events.AccessGrantSet().get_logs(from_block=start, to_block=min(start + 1999, tip)):
+                args = log['args']
+                latest[(bytes(args['resourceId']), args['grantee'])] = log
+        results = []
+        for (resource, grantee), log in latest.items():
+            owner, data_hash, cid, exists = contract.functions.resources(resource).call()
+            if not exists or wallet.lower() not in (owner.lower(), grantee.lower()):
+                continue
+            if not cid.startswith('medilink:record:') or bytes(Web3.keccak(text=cid)) != resource or bytes(data_hash) != resource:
+                continue
+            results.append({'record_id': cid.removeprefix('medilink:record:'),
+                            'resource_id': Web3.to_hex(resource), 'owner_wallet': owner,
+                            'recipient_wallet': grantee,
+                            'active': bool(contract.functions.hasGrant(resource, grantee).call()),
+                            'tx_hash': Web3.to_hex(log['transactionHash'])})
+        return results
+
     def transact(self, function, private_key, save_hash=lambda _hash: None):
         with self.lock:
             account = self.w3.eth.account.from_key(private_key)

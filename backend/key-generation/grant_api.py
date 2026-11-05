@@ -309,6 +309,46 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             item[field + "_name"] = db().execute("SELECT name FROM users WHERE id=?", (row[field + "_id"],)).fetchone()[0]
         return item
 
+    def wallet_grants():
+        # The blockchain is the durable index for browser-signed grants. Never
+        # trust a submitted CID alone: it must belong to the enrolled chain owner.
+        address = setting("registry_address") or (chain.registry_address if chain else None)
+        if not address or not hasattr(chain, "wallet_shares"):
+            return []
+        me = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+        if not me:
+            return []
+        result = []
+        for share in chain.wallet_shares(address, me["wallet"]):
+            owner = db().execute("SELECT * FROM users WHERE lower(wallet)=lower(?)", (share['owner_wallet'],)).fetchone()
+            peer = db().execute("SELECT * FROM users WHERE lower(wallet)=lower(?)", (share['recipient_wallet'],)).fetchone()
+            if not owner or not peer or g.uid not in (owner['id'], peer['id']):
+                continue
+            try:
+                record_id = str(uuid.UUID(share['record_id']))
+            except (ValueError, TypeError):
+                continue
+            document = documents.get(record_id)
+            if not document or document['owner_id'] != owner['id']:
+                continue
+            result.append(dict(
+                id=record_id + ':' + peer['id'], owner_id=owner['id'], owner_name=owner['name'],
+                recipient_id=peer['id'], recipient_name=peer['name'], recipient_wallet=peer['wallet'],
+                record_ids=[record_id], document=document, record_name=document['name'], scope=document['kind'],
+                contract_address=address, resource_id=share['resource_id'], chain_enabled=True,
+                status='active' if share['active'] else 'revoked', registry_revoked=not share['active'],
+                tx_hash=share['tx_hash'], register_tx=share['tx_hash'],
+                deploy_tx=None, resource_tx=None, revoke_tx=None, error=None))
+        return result
+
+    def wallet_document_allowed(document):
+        address = setting("registry_address") or (chain.registry_address if chain else None)
+        if not address or not hasattr(chain, "wallet_resource"):
+            return False
+        owner = db().execute("SELECT wallet FROM users WHERE id=?", (document['owner_id'],)).fetchone()
+        peer = db().execute("SELECT wallet FROM users WHERE id=?", (g.uid,)).fetchone()
+        return bool(owner and peer and chain.wallet_resource(address, document['id'], owner['wallet'], peer['wallet']))
+
     def get_grant(grant_id):
         row = db().execute("SELECT * FROM grants WHERE id=? AND (owner_id=? OR recipient_id=?)",
                            (grant_id, g.uid, g.uid)).fetchone()
@@ -478,6 +518,16 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             registry_address=setting("registry_address"),
             document_uploads_configured=uploads_configured,
         )
+
+    @app.post("/api/registry/resolve")
+    def resolve_registry():
+        # Authentication runs first. Reuse the shared, bytecode-validated registry
+        # rather than assuming the first Hardhat deployment is AccessRegistry.
+        if chain is None:
+            raise APIError("Blockchain mode is not enabled on the API.", 503)
+        with lock:
+            address = registry()
+        return jsonify(address=address, chain_id=chain.chain_id)
 
     @app.post("/api/external-import/epic/authorize")
     def authorize_epic():
@@ -693,10 +743,11 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 rows = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND status='active'",
                                     (document["owner_id"], g.uid)).fetchall()
                 permitted = next((row for row in rows if record_id in json.loads(row["records"])), None)
-                if permitted is None:
+                if permitted is not None:
+                    # Preserve the server-created grant's DH and live checks.
+                    access(permitted["id"])
+                elif not wallet_document_allowed(document):
                     raise APIError("Document not found or access denied", 403)
-                # Reuse DH verification and live registry checks, including revocation.
-                access(permitted["id"])
             response = Response(documents.read(record_id, document["owner_id"]), mimetype=document["mime_type"])
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
@@ -706,7 +757,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     def grants():
         with lock:
             rows = db().execute("SELECT * FROM grants WHERE owner_id=? OR recipient_id=? ORDER BY created_at DESC", (g.uid, g.uid)).fetchall()
-            return jsonify([serialize(reconcile(row)) for row in rows])
+            return jsonify([serialize(reconcile(row)) for row in rows] + wallet_grants())
 
     @app.post("/api/grants")
     def grant():

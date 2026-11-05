@@ -25,4 +25,10 @@ if [ -f faucet.deployment.json ] && [ -z "${FAUCET_ADDRESS:-}" ]; then
   FAUCET_ADDRESS="$(.venv/bin/python -c 'import json; print(json.load(open("faucet.deployment.json")).get("address",""))')"
   export FAUCET_ADDRESS
 fi
+# The combined launcher has verified this address against the current Hardhat
+# instance. Override stale .env/deployment-file addresses after loading them.
+if [ -n "${MEDILINK_LOCAL_FAUCET_ADDRESS:-}" ]; then
+  export FAUCET_ADDRESS="$MEDILINK_LOCAL_FAUCET_ADDRESS"
+  export CHAIN_ID=31337
+fi
 exec .venv/bin/python grant_api.py --chain --auto-data-dir

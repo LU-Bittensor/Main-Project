@@ -50,6 +50,9 @@ mode = sys.argv[1]
 try:
     if mode in ('port', 'api-port'):
         with socket.socket() as sock:
+            # Match server restart behavior: ignore closed connections in TIME_WAIT,
+            # while still rejecting an actively listening process.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(('127.0.0.1', 8545 if mode == 'port' else 5001))
     elif mode == 'chain':
         def rpc(method):
@@ -63,13 +66,15 @@ try:
         with urllib.request.urlopen('http://127.0.0.1:5001/api/health', timeout=1) as response:
             health = json.load(response)
         assert health['mode'] == 'supabase' and health['chain'] is True
-except Exception:
+except Exception as error:
+    if mode in ('port', 'api-port'):
+        print(f"Cannot bind local port {8545 if mode == 'port' else 5001}: {error}", file=sys.stderr)
     sys.exit(1)
 PY
 }
 
 if ! probe api-port; then
-  echo "Port 5001 is already in use. Stop the existing API before starting this launcher." >&2
+  echo "Port 5001 is unavailable. Check the bind error above; stop an existing API if it owns this port." >&2
   exit 1
 fi
 (cd "$CHAIN_DIR" && node node_modules/hardhat/internal/cli/cli.js compile)
@@ -80,7 +85,8 @@ elif probe port; then
   (cd "$CHAIN_DIR" && exec node node_modules/hardhat/internal/cli/cli.js node --hostname 127.0.0.1) &
   CHAIN_PID=$!
 else
-  echo "Port 8545 is occupied by a service that is not a compatible local Hardhat node." >&2
+  echo "Cannot start Hardhat: port 8545 is unavailable and the RPC probe did not confirm a compatible node." >&2
+  echo "Check the listener with: lsof -nP -iTCP:8545 -sTCP:LISTEN" >&2
   exit 1
 fi
 
@@ -98,6 +104,13 @@ wait_ready() {
   return 1
 }
 wait_ready chain "$CHAIN_PID"
+export RPC_URL="${RPC_URL:-http://127.0.0.1:8545}"
+export CHAIN_ID=31337
+export OWNER_PRIVATE_KEY="${OWNER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
+echo "Preparing and funding the local MediLink faucet..."
+export MEDILINK_LOCAL_FAUCET_ADDRESS
+MEDILINK_LOCAL_FAUCET_ADDRESS="$("$PYTHON" "$API_DIR/start_local_faucet.py")"
+echo "Local faucet ready at $MEDILINK_LOCAL_FAUCET_ADDRESS"
 echo "Starting Python API on http://127.0.0.1:5001"
 bash "$API_DIR/load_API_bc.sh" &
 API_PID=$!
