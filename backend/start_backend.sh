@@ -32,16 +32,44 @@ if [ ! -f "$CHAIN_DIR/node_modules/hardhat/internal/cli/cli.js" ]; then
   (cd "$CHAIN_DIR" && npm ci)
 fi
 
-# Match the API launcher's configuration without printing credentials.
+# Match the API launcher's configuration (Supabase secrets, etc.).
 if [ -f "$API_DIR/.env" ]; then
   set -a
+  # shellcheck disable=SC1091
   source "$API_DIR/.env"
   set +a
 fi
-case "${RPC_URL:-http://127.0.0.1:8545}" in
-  http://127.0.0.1:8545|http://localhost:8545) ;;
-  *) echo "This launcher uses local Hardhat on port 8545. For a custom RPC_URL, use key-generation/load_API_bc.sh directly." >&2; exit 1 ;;
-esac
+
+# This launcher is Hardhat-only. Force the same local-chain exports that
+# deploy_evm_contracts.sh / deploy_access_registry.py / deploy_medilink_faucet.py expect.
+# Hardhat Account #0 is a well-known public test key — never use it with real funds.
+export RPC_URL="http://127.0.0.1:8545"
+export EVM_RPC_URL="$RPC_URL"
+export CHAIN_ID="31337"
+export EVM_CHAIN_ID="$CHAIN_ID"
+export OWNER_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+export FAUCET_OPERATOR_PRIVATE_KEY="${FAUCET_OPERATOR_PRIVATE_KEY:-$OWNER_PRIVATE_KEY}"
+export FUND_LOCAL_WALLETS="${FUND_LOCAL_WALLETS:-1}"
+# Optional: pick up a prior local faucet deploy for grant_api.
+if [ -f "$API_DIR/faucet.deployment.json" ] && [ -z "${FAUCET_ADDRESS:-}" ]; then
+  FAUCET_ADDRESS="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("address",""))' "$API_DIR/faucet.deployment.json")"
+  export FAUCET_ADDRESS
+fi
+if [ -f "$API_DIR/deployment.json" ] && [ -z "${ACCESS_REGISTRY:-}" ]; then
+  ACCESS_REGISTRY="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("address",""))' "$API_DIR/deployment.json")"
+  export ACCESS_REGISTRY
+fi
+if [ -n "${ACCESS_REGISTRY:-}" ]; then
+  export CONTRACT_ADDRESS="${CONTRACT_ADDRESS:-$ACCESS_REGISTRY}"
+  export REGISTRY_ADDRESS="${REGISTRY_ADDRESS:-$ACCESS_REGISTRY}"
+fi
+
+echo "Local EVM exports:"
+echo "  RPC_URL=$RPC_URL"
+echo "  CHAIN_ID=$CHAIN_ID"
+echo "  OWNER_PRIVATE_KEY=<Hardhat account #0>"
+echo "  FAUCET_ADDRESS=${FAUCET_ADDRESS:-<unset — run ./key-generation/deploy_evm_contracts.sh hardhat>}"
+echo "  ACCESS_REGISTRY=${ACCESS_REGISTRY:-<unset — run ./key-generation/deploy_evm_contracts.sh hardhat>}"
 
 probe() {
   "$PYTHON" - "$1" <<'PY'

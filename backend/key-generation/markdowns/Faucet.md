@@ -30,41 +30,23 @@ code and operator. A reset creates a new deployment; local state is stored in
 modified. `LOCAL_FAUCET_BALANCE_WEI` overrides the target balance (default 1 ETH).
 Drip/minimum/cooldown environment settings apply when deploying a new faucet.
 
-## Deploy (Hardhat manually)
+## Deploy (Hardhat manually or remote EVM)
+
+Prefer the combined script (AccessRegistry + faucet + optional fund):
 
 ```bash
-# Terminal A
+# Terminal A — local chain only
 cd Main-Project/backend/key-generation/testContractDeployment
 npx hardhat node --hostname 127.0.0.1
 
 # Terminal B
 cd Main-Project/backend/key-generation
-export RPC_URL=http://127.0.0.1:8545
-export CHAIN_ID=31337
-export OWNER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-.venv/bin/python deploy_medilink_faucet.py
-source deployment.exports.sh   # if present
-
-# Fund the faucet contract (1 ETH)
-.venv/bin/python - <<'PY'
-import os
-from web3 import Web3
-w3 = Web3(Web3.HTTPProvider(os.environ["RPC_URL"]))
-acct = w3.eth.account.from_key(os.environ["OWNER_PRIVATE_KEY"])
-tx = {
-    "from": acct.address,
-    "to": os.environ["FAUCET_ADDRESS"],
-    "value": w3.to_wei(1, "ether"),
-    "nonce": w3.eth.get_transaction_count(acct.address),
-    "gas": 100000,
-    "gasPrice": w3.eth.gas_price,
-    "chainId": int(os.environ["CHAIN_ID"]),
-}
-signed = w3.eth.account.sign_transaction(tx, os.environ["OWNER_PRIVATE_KEY"])
-raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-print(w3.eth.wait_for_transaction_receipt(w3.eth.send_raw_transaction(raw)))
-PY
+./deploy_evm_contracts.sh hardhat
+# or: OWNER_PRIVATE_KEY=0x... ./deploy_evm_contracts.sh subtensor-testnet
+source deployment.exports.sh
 ```
+
+Individual scripts: `deploy_access_registry.py`, `deploy_medilink_faucet.py`.
 
 ## Run grant API with faucet
 

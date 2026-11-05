@@ -1,13 +1,17 @@
-# Sample Hardhat Project
+# Local Hardhat (AccessRegistry + MediLinkFaucet)
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a Hardhat Ignition module that deploys that contract.
-
-Try running some of the following tasks:
+Hardhat copies authoritative Solidity from `backend/contracts/` on config load. Prefer deploying with the Python wrapper from the parent folder (writes `deployment.json` / exports):
 
 ```shell
-npx hardhat help
+npx hardhat node --hostname 127.0.0.1
+# other terminal:
+cd .. && ./deploy_evm_contracts.sh hardhat
+```
+
+Or Hardhat-only (prints addresses; does not write `deployment.json`):
+
+```shell
+npx hardhat compile
+npx hardhat run scripts/deploy.js --network localhost
 npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat ignition deploy ./ignition/modules/Lock.js
 ```

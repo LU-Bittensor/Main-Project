@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import sqlite3
 import time
 from threading import RLock
@@ -19,6 +20,7 @@ from flask import Flask, Response, g, jsonify, request
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 from epic_oauth import EpicOAuth, EpicOAuthError
+from web3 import Web3
 from epic_import import EpicImports, EpicImportError
 from epic_share import ImportDocumentStore
 
@@ -60,12 +62,74 @@ def vault_object_key(user_id: str) -> str:
     return f"vaults/{user_id}/{VAULT_OBJECT_NAME}"
 
 
+def vault_record_resource_id(record_id: str) -> bytes:
+    """Match health-locker-guard resourceIdFromRecord: keccak256(utf8 medilink:record:<id>)."""
+    return bytes(Web3.keccak(text=f"medilink:record:{record_id}"))
+
+
+def vault_record_resource_id_hex(record_id: str) -> str:
+    return vault_record_resource_id(record_id).hex()
+
+
+def _is_auto_data_fingerprint(name: str) -> bool:
+    return len(name) == 64 and all(character in "0123456789abcdef" for character in name)
+
+
+def resolve_local_vault_dir(data_directory: Path) -> Path:
+    """Stable on-disk vault root (auth-bound), not Hardhat instance shards.
+
+    `--auto-data-dir` nests SQLite under GRANT_DATA_DIR/<fingerprint> so chain
+    resets do not reuse stale grants. Encrypted vault keystores must survive those
+    resets, so they live at GRANT_DATA_DIR/vault_objects (or GRANT_VAULT_DIR).
+    """
+    override = os.getenv("GRANT_VAULT_DIR", "").strip()
+    if override:
+        return Path(override)
+    base = os.getenv("GRANT_DATA_DIR", "").strip()
+    data_path = data_directory.resolve()
+    if base:
+        base_path = Path(base).resolve()
+        if data_path == base_path:
+            return base_path / "vault_objects"
+        # --auto-data-dir child: GRANT_DATA_DIR/<sha256-fingerprint>
+        if data_path.parent == base_path and _is_auto_data_fingerprint(data_directory.name):
+            return base_path / "vault_objects"
+    if _is_auto_data_fingerprint(data_directory.name):
+        return data_directory.parent / "vault_objects"
+    return data_directory / "vault_objects"
+
+
+def recover_vault_from_legacy_shards(vault_dir: Path, user_id: str) -> Path | None:
+    """If a keystore only exists under old per-Hardhat shard dirs, promote the newest copy."""
+    dest = vault_dir / user_id / VAULT_OBJECT_NAME
+    if dest.is_file():
+        return dest
+    root = vault_dir.parent
+    if not root.is_dir():
+        return None
+    candidates = sorted(
+        (
+            path
+            for path in root.glob(f"*/vault_objects/{user_id}/{VAULT_OBJECT_NAME}")
+            if path.is_file()
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shutil.copy2(candidates[0], dest)
+    dest.chmod(0o600)
+    return dest
+
+
 def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = VAULT_MAX_BYTES
     directory = Path(data_dir or os.getenv("GRANT_DATA_DIR", Path(__file__).parent / (".grant-pairs-dev" if dev else ".grant-pairs-data")))
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    vault_dir = directory / "vault_objects"
+    vault_dir = resolve_local_vault_dir(directory)
     vault_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Short-lived tokens for local (non-Hippius) vault PUT/GET when credentials are unset.
     vault_local_tokens: dict[str, dict] = {}
@@ -401,6 +465,81 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     def secret_for(row):
         return decrypt_secret(master_key, row["secret"], "grant:" + row["id"])
 
+    def is_client_chain_grant(row) -> bool:
+        """Vault-signed AccessRegistry grants use keccak(medilink:record:<uuid>) ids + interim commitments."""
+        try:
+            record_ids = json.loads(row["records"])
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if len(record_ids) != 1 or not isinstance(record_ids[0], str):
+            return False
+        return row["identifier"] == vault_record_resource_id_hex(record_ids[0])
+
+    def registry_address_for_checks():
+        if not chain:
+            return None
+        address = (
+            setting("registry_address")
+            or chain.registry_address
+            or os.getenv("REGISTRY_ADDRESS")
+            or os.getenv("ACCESS_REGISTRY")
+            or os.getenv("CONTRACT_ADDRESS")
+        )
+        if address:
+            return address
+        # Fall back to the last local Hardhat deploy artifact.
+        deploy_path = Path(__file__).parent / "deployment.json"
+        if deploy_path.is_file():
+            try:
+                payload = json.loads(deploy_path.read_text())
+                found = payload.get("address") or payload.get("ACCESS_REGISTRY")
+                if isinstance(found, str) and found.startswith("0x"):
+                    return found
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+        return None
+
+    def recipient_has_api_grant(record_id: str, recipient_id: str):
+        rows = db().execute(
+            "SELECT * FROM grants WHERE recipient_id=? AND status='active'",
+            (recipient_id,),
+        ).fetchall()
+        for row in rows:
+            try:
+                if record_id in json.loads(row["records"]):
+                    return row
+            except (TypeError, json.JSONDecodeError):
+                continue
+        return None
+
+    def recipient_has_on_chain_grant(record_id: str, recipient_id: str) -> bool:
+        if not chain:
+            return False
+        user = db().execute("SELECT wallet FROM users WHERE id=?", (recipient_id,)).fetchone()
+        if not user or not user["wallet"]:
+            return False
+        address = registry_address_for_checks()
+        if not address:
+            app.logger.warning("No AccessRegistry address configured for on-chain document checks")
+            return False
+        try:
+            chain.validate_registry(address)
+            allowed = bool(
+                chain.has_grant(address, vault_record_resource_id(record_id), user["wallet"])
+            )
+            if allowed and not setting("registry_address"):
+                setting("registry_address", address)
+            return allowed
+        except Exception:
+            app.logger.exception("On-chain grant check failed for record %s", record_id[:8])
+            return False
+
+    def recipient_can_view_record(record_id: str, recipient_id: str) -> bool:
+        return (
+            recipient_has_api_grant(record_id, recipient_id) is not None
+            or recipient_has_on_chain_grant(record_id, recipient_id)
+        )
+
     def reconcile(row):
         if row["status"] == "revoking":
             return reconcile_revocation(row)
@@ -410,7 +549,10 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         if row["status"] == "active":
             if not chain.has_grant(row["contract_address"], resource, wallet):
                 return update(row["id"], status="revoked", registry_revoked=1, error=None)
-            if not chain.matches(row["contract_address"], resource, wallet, secret_for(row)):
+            # Vault interim commitments are not DH-derived; only require live hasGrant.
+            if not is_client_chain_grant(row) and not chain.matches(
+                row["contract_address"], resource, wallet, secret_for(row)
+            ):
                 return update(row["id"], status="failed", error="Registry commitment changed. Revoke before sharing again.")
         elif row["register_tx"]:
             receipt = chain.receipt(row["register_tx"])
@@ -515,7 +657,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             chain=chain is not None,
             faucet=faucet_ok,
             protocol="dh-registry-v1",
-            registry_address=setting("registry_address"),
+            registry_address=registry_address_for_checks() if chain else setting("registry_address"),
             document_uploads_configured=uploads_configured,
         )
 
@@ -730,7 +872,21 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             mime = document_type(name, content)
         except ValueError as error:
             raise APIError(str(error)) from error
-        return jsonify(documents.add(g.uid, name, tags, mime, content)), 201
+        kind = (request.form.get("kind") or "Document").strip() or "Document"
+        if len(kind) > 50 or any(ord(c) < 32 for c in kind):
+            raise APIError("Use a record type of 1–50 characters without control characters")
+        return jsonify(documents.add(g.uid, name, tags, mime, content, kind=kind)), 201
+
+    @app.get("/api/records/<record_id>")
+    def record_metadata(record_id):
+        """Metadata for owner or an authorized recipient (API grant or on-chain hasGrant)."""
+        with lock:
+            document = documents.get(record_id)
+            if document is None:
+                raise APIError("Record not found", 404)
+            if document["owner_id"] != g.uid and not recipient_can_view_record(record_id, g.uid):
+                raise APIError("Record not found or access denied", 403)
+            return jsonify(document)
 
     @app.post("/api/records/<record_id>/document")
     def view_document(record_id):
@@ -740,13 +896,20 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             if document is None or not document["has_document"]:
                 raise APIError("No uploaded document is available for this record", 404)
             if document["owner_id"] != g.uid:
-                rows = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND status='active'",
-                                    (document["owner_id"], g.uid)).fetchall()
-                permitted = next((row for row in rows if record_id in json.loads(row["records"])), None)
+                permitted = recipient_has_api_grant(record_id, g.uid)
+                allowed = False
                 if permitted is not None:
-                    # Preserve the server-created grant's DH and live checks.
-                    access(permitted["id"])
-                elif not wallet_document_allowed(document):
+                    try:
+                        # Reuse DH verification and live registry checks, including revocation.
+                        access(permitted["id"])
+                        allowed = True
+                    except APIError:
+                        # Stale/mismatched API grant: fall through to vault hasGrant.
+                        allowed = False
+                if not allowed and recipient_has_on_chain_grant(record_id, g.uid):
+                    # Vault-signed AccessGrantSet is enough for MVP file delivery.
+                    allowed = True
+                if not allowed:
                     raise APIError("Document not found or access denied", 403)
             response = Response(documents.read(record_id, document["owner_id"]), mimetype=document["mime_type"])
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -766,11 +929,17 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             raise APIError("Expected a JSON object")
         recipient = body.get("recipient_id")
         record_ids = body.get("record_ids")
+        client_chain = bool(body.get("client_chain"))
+        client_tx = body.get("tx_hash")
+        if client_tx is not None and (not isinstance(client_tx, str) or not 1 <= len(client_tx) <= 128):
+            raise APIError("Invalid tx_hash")
         if not isinstance(recipient, str) or recipient == g.uid:
             raise APIError("Select another registered user")
         if (not isinstance(record_ids, list) or not 1 <= len(record_ids) <= 100 or
                 any(not isinstance(value, str) for value in record_ids)):
             raise APIError("Select between 1 and 100 records")
+        if client_chain and not chain:
+            raise APIError("client_chain grants require the API to run with --chain", 400)
         record_ids = sorted(set(record_ids))
         owned = {record["id"]: record for record in owner_records()}
         if any(record_id not in owned for record_id in record_ids):
@@ -781,23 +950,43 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             peer = db().execute("SELECT * FROM users WHERE id=?", (recipient,)).fetchone()
             if not peer:
                 raise APIError("Recipient must sign in and open the access panel first", 404)
+            if client_chain and not peer["wallet"]:
+                raise APIError("Recipient must enroll a vault wallet first", 400)
             results = []
             for record_id in record_ids:
                 record_json = json.dumps([record_id])
                 existing = db().execute("SELECT * FROM grants WHERE owner_id=? AND recipient_id=? AND records=? AND status IN ('pending','active','revoking','failed')",
                                         (g.uid, recipient, record_json)).fetchone()
                 if existing:
-                    results.append(serialize(advance(existing)))
+                    if client_chain:
+                        results.append(serialize(reconcile(existing)))
+                    else:
+                        results.append(serialize(advance(existing)))
                     continue
                 grant_id = str(uuid.uuid4())
                 private = decrypt_secret(master_key, owner["private_key"], "user:" + g.uid)
                 envelope = create_access_grant(private, peer["public_key"], grant_id, master_key)
-                identifier = hashlib.sha256(json.dumps(["medilink-resource-v1", supabase_url or "local-demo", g.uid, record_id]).encode()).hexdigest()
-                db().execute("INSERT INTO grants (id,owner_id,recipient_id,scope,records,record_name,identifier,status,secret) VALUES (?,?,?,?,?,?,?,'pending',?)",
-                             (grant_id, g.uid, recipient, owned[record_id]["kind"], record_json,
-                              owned[record_id]["name"], identifier, envelope))
-                db().commit()
-                results.append(serialize(advance(get_grant(grant_id))))
+                if client_chain:
+                    # Same resource id the browser already registered on AccessRegistry.
+                    identifier = vault_record_resource_id_hex(record_id)
+                    address = registry_address_for_checks()
+                    if not address:
+                        raise APIError("No AccessRegistry address configured for client_chain grants", 503)
+                    db().execute(
+                        "INSERT INTO grants (id,owner_id,recipient_id,scope,records,record_name,identifier,"
+                        "contract_address,status,secret,tx_hash) VALUES (?,?,?,?,?,?,?,?, 'active',?,?)",
+                        (grant_id, g.uid, recipient, owned[record_id]["kind"], record_json,
+                         owned[record_id]["name"], identifier, address, envelope, client_tx),
+                    )
+                    db().commit()
+                    results.append(serialize(reconcile(get_grant(grant_id))))
+                else:
+                    identifier = hashlib.sha256(json.dumps(["medilink-resource-v1", supabase_url or "local-demo", g.uid, record_id]).encode()).hexdigest()
+                    db().execute("INSERT INTO grants (id,owner_id,recipient_id,scope,records,record_name,identifier,status,secret) VALUES (?,?,?,?,?,?,?,'pending',?)",
+                                 (grant_id, g.uid, recipient, owned[record_id]["kind"], record_json,
+                                  owned[record_id]["name"], identifier, envelope))
+                    db().commit()
+                    results.append(serialize(advance(get_grant(grant_id))))
             return jsonify(grants=results), 200
 
     @app.post("/api/grants/<grant_id>/resume")
@@ -859,6 +1048,12 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         return path
 
+    def ensure_local_vault_file(user_id: str) -> Path | None:
+        path = local_vault_path(user_id)
+        if path.is_file():
+            return path
+        return recover_vault_from_legacy_shards(vault_dir, user_id)
+
     def purge_expired_vault_tokens():
         now = time.time()
         expired = [token for token, meta in vault_local_tokens.items() if meta["exp"] <= now]
@@ -874,7 +1069,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     def vault_exists_for(user_id: str) -> bool:
         if hippius_configured():
             return hippius_object_exists(HIPPIUS_BUCKET, vault_object_key(user_id))
-        return local_vault_path(user_id).is_file()
+        return ensure_local_vault_file(user_id) is not None
 
     @app.get("/api/vault/status")
     def vault_status():
@@ -949,8 +1144,9 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             return jsonify(ok=True), 200
         if meta["op"] != "get":
             raise APIError("Vault URL is not valid for download.", 403)
-        if not path.is_file():
+        if ensure_local_vault_file(user_id) is None:
             raise APIError("No vault keystore found for this account.", 404)
+        path = local_vault_path(user_id)
         vault_local_tokens.pop(token, None)
         return Response(path.read_bytes(), mimetype="application/json")
 
@@ -958,7 +1154,11 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
 
 def local_chain_data_dir(chain, dev=True):
-    """Keep test databases separate across Hardhat resets and contract builds."""
+    """Keep SQLite/test DBs separate across Hardhat resets and contract builds.
+
+    Vault keystores are intentionally NOT stored under this fingerprint directory;
+    see resolve_local_vault_dir().
+    """
     if chain.chain_id != 31337:
         raise RuntimeError("Automatic data directories are only supported for local Hardhat testing")
     metadata = chain.w3.provider.make_request("hardhat_metadata", [])
@@ -977,7 +1177,8 @@ def main():
     parser.add_argument("--chain", action="store_true", help="Use one shared AccessRegistry and verify access on-chain")
     parser.add_argument("--port", type=int, default=5001)
     parser.add_argument("--auto-data-dir", action="store_true",
-                        help="Use a separate test directory per Hardhat instance and contract build")
+                        help="Use a separate SQLite directory per Hardhat instance and contract build "
+                             "(vault keystores stay in GRANT_DATA_DIR/vault_objects)")
     args = parser.parse_args()
     if args.auto_data_dir and not args.chain:
         parser.error("--auto-data-dir requires --chain")
@@ -989,6 +1190,7 @@ def main():
     directory = local_chain_data_dir(chain, dev=args.dev) if args.auto_data_dir else None
     if directory is not None:
         print(f"Local test data: {directory.resolve()}", flush=True)
+        print(f"Local vault store: {resolve_local_vault_dir(directory).resolve()}", flush=True)
     app = create_app(dev=args.dev, chain=chain, data_dir=directory)
     app.run(host="127.0.0.1", port=args.port, debug=False)
 

@@ -96,8 +96,25 @@ class ChainGrants:
                 raise RuntimeError("Transaction reverted")
             return receipt
 
+    def accepted_runtimes(self):
+        """Hardhat artifact and py-solc-x deploys can differ; accept either known runtime."""
+        runtimes = [bytes.fromhex(self.runtime.removeprefix("0x"))]
+        deploy_path = Path(__file__).parent / "deployment.json"
+        if deploy_path.is_file():
+            try:
+                payload = json.loads(deploy_path.read_text())
+                raw = payload.get("deployedBytecode")
+                if isinstance(raw, str) and raw.strip():
+                    runtimes.append(bytes.fromhex(raw.removeprefix("0x")))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                pass
+        return runtimes
+
     def validate_registry(self, address):
-        if bytes(self.w3.eth.get_code(address)) != bytes.fromhex(self.runtime.removeprefix("0x")):
+        code = bytes(self.w3.eth.get_code(address))
+        if not code:
+            raise RuntimeError("No contract at registry address")
+        if code not in self.accepted_runtimes():
             raise RuntimeError("Registry bytecode does not match AccessRegistry.sol; check chain/address")
 
     def deploy(self, save_hash):

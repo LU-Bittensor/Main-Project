@@ -8,7 +8,9 @@ This directory contains the Python API, blockchain tooling, Supabase database as
 | --- | --- |
 | `key-generation/grant_api.py` | Authenticated grant, record, document, vault, enroll, and faucet API |
 | `key-generation/faucet_client.py` | MediLinkFaucet balance check and operator drip |
+| `key-generation/deploy_access_registry.py` | Compile/deploy AccessRegistry; writes `deployment.json` |
 | `key-generation/deploy_medilink_faucet.py` | Compile/deploy faucet; writes `faucet.deployment.json` |
+| `key-generation/deploy_evm_contracts.sh` | One-shot deploy of registry + faucet to a chosen EVM |
 | `key-generation/documents.py` | Document contents and metadata in Supabase records |
 | `key-generation/chain_grants.py` | AccessRegistry blockchain adapter |
 | `key-generation/DHkey_share.py` | Key generation, encryption, and DH verification |
@@ -17,12 +19,34 @@ This directory contains the Python API, blockchain tooling, Supabase database as
 | `key-generation/tests/` | Python API, document, faucet, and chain integration tests |
 | `key-generation/testContractDeployment/` | Hardhat configuration, deployment scripts, and Solidity tests |
 | `key-generation/markdowns/Faucet.md` | Local faucet deploy and API wiring |
+| `key-generation/markdowns/Records.md` | Document upload path (UI → grant API → Supabase) |
 | `contracts/AccessRegistry.sol` | Authoritative registry contract; Hardhat copies it into its compilation directory |
 | `contracts/MediLinkFaucet.sol` | Ops-funded gas faucet for vault H160s |
 | `supabase/` | Supabase configuration, SQL migrations/tests, and shared schema types |
 | `src/integrations/supabase/` | Server-only Supabase admin, request-authentication, and cron helpers |
 
 The complete former `Main-Project/key-generation` project now lives at `Main-Project/backend/key-generation`. Faucet and non-custodial vault enroll are part of `grant_api.py` (single process on port 5001)—do not run a separate `wallet_api`. A leftover untracked `Main-Project/key-generation/` tree (if present) is obsolete. The TypeScript package in this directory and the Hardhat package are separate projects.
+
+### Deploy contracts to an EVM
+
+From `backend/key-generation` (venv with `requirements.txt` installed):
+
+```sh
+./deploy_evm_contracts.sh hardhat              # local node on :8545; funds faucet with 1 ETH
+OWNER_PRIVATE_KEY=0x... ./deploy_evm_contracts.sh subtensor-testnet
+RPC_URL=... CHAIN_ID=... OWNER_PRIVATE_KEY=0x... ./deploy_evm_contracts.sh custom
+```
+
+Then `source deployment.exports.sh` and set frontend `VITE_ACCESS_REGISTRY` / `VITE_EVM_RPC_URL` / `VITE_EVM_CHAIN_ID` to the printed values.
+
+### Document upload (frontend → grant API → Supabase)
+
+health-locker-guard **Seal & add record** calls the grant API (not a local-only UI list):
+
+- `POST /api/records` — multipart `file` (+ optional `tags`, `kind`); patient role required
+- `GET /api/records` — owned document metadata for Access ledger sharing
+
+Bytes live in `public.records.file_content`. Set `SUPABASE_SECRET_KEY` in `key-generation/.env` to the same project as the UI. One shared `AccessRegistry` holds on-chain grants; uploads themselves are off-chain in Supabase.
 
 ## Start locally
 
