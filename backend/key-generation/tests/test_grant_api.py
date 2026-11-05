@@ -32,6 +32,29 @@ def test_local_data_directory_tracks_hardhat_instance_and_build(tmp_path, monkey
         grant_api.local_chain_data_dir(chain)
 
 
+def test_vault_dir_stable_across_auto_data_dir_shards(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRANT_DATA_DIR", str(tmp_path))
+    shard_a = tmp_path / ("a" * 64)
+    shard_b = tmp_path / ("b" * 64)
+    assert grant_api.resolve_local_vault_dir(shard_a) == tmp_path / "vault_objects"
+    assert grant_api.resolve_local_vault_dir(shard_b) == tmp_path / "vault_objects"
+    # Direct (non-fingerprint) data dirs keep vaults beside the SQLite DB.
+    plain = tmp_path / "plain-data"
+    assert grant_api.resolve_local_vault_dir(plain) == plain / "vault_objects"
+
+
+def test_vault_recovers_from_legacy_hardhat_shard(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRANT_DATA_DIR", str(tmp_path))
+    legacy = tmp_path / ("c" * 64) / "vault_objects" / "patient" / "keystore.v1.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"version":1,"userId":"patient"}')
+    vault_dir = tmp_path / "vault_objects"
+    recovered = grant_api.recover_vault_from_legacy_shards(vault_dir, "patient")
+    assert recovered is not None
+    assert recovered == vault_dir / "patient" / "keystore.v1.json"
+    assert recovered.read_text() == legacy.read_text()
+
+
 def headers(user="patient"):
     return {"Authorization": "Bearer demo-" + user}
 

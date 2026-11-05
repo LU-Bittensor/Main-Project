@@ -102,11 +102,11 @@ class DemoDocumentStore:
         self.rows = {}
         self.contents = {}
 
-    def add(self, owner, name, tags, mime, content):
+    def add(self, owner, name, tags, mime, content, *, kind='Document'):
         from datetime import datetime, timezone
         identifier = str(uuid.uuid4())
         self.rows[identifier] = {'id': identifier, 'owner_id': owner, 'name': name,
-            'kind': 'Document', 'tags': tags, 'mime_type': mime, 'size': len(content),
+            'kind': kind, 'tags': tags, 'mime_type': mime, 'size': len(content),
             'has_document': True, 'created_at': datetime.now(timezone.utc).isoformat()}
         self.contents[identifier] = content
         return self.get(identifier)

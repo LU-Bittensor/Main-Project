@@ -25,4 +25,12 @@ if [ -f faucet.deployment.json ] && [ -z "${FAUCET_ADDRESS:-}" ]; then
   FAUCET_ADDRESS="$(.venv/bin/python -c 'import json; print(json.load(open("faucet.deployment.json")).get("address",""))')"
   export FAUCET_ADDRESS
 fi
+if [ -f deployment.json ] && [ -z "${ACCESS_REGISTRY:-}" ]; then
+  ACCESS_REGISTRY="$(.venv/bin/python -c 'import json; print(json.load(open("deployment.json")).get("address",""))')"
+  export ACCESS_REGISTRY
+fi
+if [ -n "${ACCESS_REGISTRY:-}" ]; then
+  export CONTRACT_ADDRESS="${CONTRACT_ADDRESS:-$ACCESS_REGISTRY}"
+  export REGISTRY_ADDRESS="${REGISTRY_ADDRESS:-$ACCESS_REGISTRY}"
+fi
 exec .venv/bin/python grant_api.py --chain --auto-data-dir

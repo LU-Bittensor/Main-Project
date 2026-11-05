@@ -3,7 +3,7 @@
 #Usage:
 #    Set environment variables before running:
 #        RPC_URL             node URL (default: http://127.0.0.1:8545)
-#        CONTRACT_ADDRESS    deployed DataAccessControl contract address
+#        CONTRACT_ADDRESS    deployed AccessRegistry contract address (legacy env name)
 #        OWNER_PRIVATE_KEY   hex private key of the contract owner
 #        USER_PRIVATE_KEY    hex private key of the accessing user
 #                            (falls back to OWNER_PRIVATE_KEY if not set)
@@ -34,7 +34,7 @@ from eth_abi import encode as abi_encode
 SCRIPT_PATH = Path(__file__).parent / "linuxSetup.sh"
 RPC_URL = os.getenv("RPC_URL", "http://127.0.0.1:8545") # http://127.0.0.1:8545 (local) or https://test.chain.opentensor.ai (testnet) or https://lite.chain.opentensor.ai (mainnet)
 CHAIN_ID = int(os.getenv("CHAIN_ID", "945")) # 31337 (local Hardhat) | 945 (Subtensor testnet)
-CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS") # deployed DataAccessControl contract address
+CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")  # AccessRegistry (or ACCESS_REGISTRY)
 OWNER_PRIVATE_KEY = os.getenv("OWNER_PRIVATE_KEY") # H160 EVM wallet private key — NOT your Bittensor coldkey
 USER_PRIVATE_KEY = os.getenv("USER_PRIVATE_KEY") # H160 EVM wallet private key for the accessing user
 

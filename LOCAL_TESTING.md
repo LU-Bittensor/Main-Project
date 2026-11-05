@@ -1,6 +1,6 @@
 # Local testing — shared AccessRegistry
 
-The frontend and Python grant API now use `backend/contracts/AccessRegistry.sol` unchanged. Hardhat copies that source into its contracts directory when loading its config, so there is one authoritative source. `DataAccessControl.sol` and its standalone CLI remain legacy examples; the API no longer deploys pair contracts.
+The frontend and Python grant API use `backend/contracts/AccessRegistry.sol` (and `MediLinkFaucet.sol` for vault gas). Hardhat copies those sources into its contracts directory when loading its config. Deploy both to any EVM with `backend/key-generation/deploy_evm_contracts.sh` (profiles: `hardhat`, `subtensor-testnet`, `subtensor-mainnet`, `custom`).
 
 ## Start the services
 
@@ -40,7 +40,7 @@ On the first share, the API deploys ONE registry, stores its deployment transact
 
 The new SQLite filename leaves old `pair-grants.sqlite3` data and old contracts untouched. Old grants are not migrated or automatically revoked; they must be recreated in the registry. Do not delete the old store if you still need its wallets or revocation capability.
 
-`--auto-data-dir` requires `--chain` and local Hardhat chain ID 31337. It selects a child directory based on the Hardhat instance, compiled contract, operator, configured registry, and authentication mode/project. Restarting only the API reuses its directory/address. Resetting Hardhat uses fresh chain data. Keep `GRANT_MASTER_KEY` consistent across restarts. The real-account launcher retains its master key in its parent data directory. Do not commit these key stores.
+`--auto-data-dir` requires `--chain` and local Hardhat chain ID 31337. It selects a child directory for **SQLite / grant DB** based on the Hardhat instance, compiled contract, operator, configured registry, and authentication mode/project. Encrypted **vault keystores** are stored separately at `GRANT_DATA_DIR/vault_objects/` (or `GRANT_VAULT_DIR`) so the same wallet survives Hardhat restarts. Restarting only the API reuses its SQLite directory/address. Resetting Hardhat uses fresh chain data but keeps vault blobs. Keep `GRANT_MASTER_KEY` consistent across restarts. The real-account launcher retains its master key in its parent data directory. Do not commit these key stores.
 
 Each recipient still has a separate custodial wallet and each grant has a fresh DH-derived credential. Each record has a stable resource ID derived from project, owner ID, and record ID. Sharing with another recipient or re-sharing after revocation reuses that resource ID and registry address. The API operator registers resources and signs grant/revoke transactions; the recipient wallet signs challenge/verification transactions.
 
@@ -49,8 +49,8 @@ The records API reads Supabase `public.records`, including uploaded document byt
 ## Browser sharing test
 
 1. Register/sign in as the recipient and open Records to enroll with the API. Sign out and sign in as the owner (or use a separate browser profile).
-2. As a patient, open **Records → Upload document**, select a PDF, PNG, JPEG, or UTF-8 text file (up to 10 MB), optionally enter comma-separated tags, and upload. The new record appears with a clickable filename and tags. Existing Supabase metadata and demo fixtures remain visible but cannot open a document unless they have an uploaded file.
-3. Open **Access ledger**, select recipient and records, and click **Grant**. All active receipts should show the SAME registry address, with different resource IDs for different records. Sharing the same record with another recipient keeps that resource ID but has a different recipient wallet.
+2. As a patient in **health-locker-guard**, open **Upload**, choose a PDF/PNG/JPEG/text file (up to 10 MB), set type/tags, and click **Seal & add record**. The UI calls `POST /api/records` (multipart); the grant API writes metadata + `file_content` into Supabase with the service secret. **Do not** expect the old local-only Seal demo or direct browser inserts to populate the Access ledger.
+3. Open **Permissions / Access ledger**, select a recipient who has already signed in and enrolled a vault wallet, choose records, and click **Grant**. With `VITE_ACCESS_REGISTRY` set, grants go to the **one shared AccessRegistry** (on-chain commitments per recipient–record)—not a new contract per pair. Offline/API grants use `POST /api/grants` when the registry is unset.
 4. As recipient, click **Check access**. Expect `AccessGranted` and a verification transaction. Repeat: each access check sends a new challenge and verification to the same registry.
 5. As owner, **Revoke** one receipt. It moves to Revoked. Expect a revocation transaction and “Recipient grant removed from registry.” The registry itself stays active. Other records/recipients must still pass checks.
 6. Share that record with the same recipient again. A new API grant/DH credential is created at the SAME registry address/resource ID. The old API receipt stays revoked.
@@ -90,7 +90,7 @@ For the integration test, start a separate compiled Hardhat node on port 18545, 
 RUN_CHAIN_TESTS=1 .venv/bin/python -m pytest tests/test_local_chain.py -q
 ```
 
-It checks shared deployment, per-resource/recipient isolation, repeated access checks, restart, revocation, re-grant, and monitor events. Existing Solidity tests for the legacy pair contract remain separate.
+It checks shared deployment, per-resource/recipient isolation, repeated access checks, restart, revocation, re-grant, and monitor events. Hardhat tests cover MediLinkFaucet source guards; deploy locally with `./deploy_evm_contracts.sh hardhat`.
 
 From `frontend`, run `npx tsc --noEmit`, lint the changed components, and `npm run build`.
 
@@ -144,6 +144,7 @@ After Supabase sign-in/sign-up, the frontend creates or unlocks an encrypted key
 ```sh
 cd Main-Project/backend/key-generation
 # Optional: real Hippius. If unset, vault blobs are stored under GRANT_DATA_DIR/vault_objects/
+# (stable across --auto-data-dir Hardhat shards; override with GRANT_VAULT_DIR)
 # export HIPPIUS_ACCESS_KEY=...
 # export HIPPIUS_SECRET_KEY=...
 # export HIPPIUS_BUCKET=...
@@ -187,7 +188,9 @@ Missing schema or server credentials return a configuration error. There is no a
 
 ### Use
 
-As a patient, open **Records → Upload document**, select a PDF, PNG, JPEG, or UTF-8 text file up to 10 MB, and optionally add comma-separated tags (up to 20, each at most 50 characters). The saved filename opens a preview popup. Share through **Access ledger**; the recipient can then open it from their shared records. Providers can view shared files but cannot use this patient upload workflow.
+As a patient in health-locker-guard: **Upload → choose file → Seal & add record**. That hits `POST /api/records` with `file`, optional `tags`, and optional `kind`. Listing uses `GET /api/records` (owned rows only). Share through **Access ledger** (same API-backed records). Providers can view shared files after a grant; patient upload requires a `patient` role in `user_roles`.
+
+**Required for uploads:** `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) on the Python API for the **same** project as the frontend; apply `20261013190000_record_documents.sql`. Restart the API after changing `.env`. Publishable keys alone authenticate users but cannot write `file_content` through the grant API.
 
 Inspect saved rows in Supabase Table Editor → `records`, or run:
 
