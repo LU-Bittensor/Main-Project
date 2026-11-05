@@ -26,7 +26,7 @@ def test_url_and_encrypted_single_use_state(store):
     assert params['response_type'] == 'code'
     assert params['aud'] == epic_oauth.FHIR_BASE
     assert params['code_challenge_method'] == 'S256'
-    assert params['scope'] == 'launch/patient patient/Patient.read'
+    assert params['scope'] == ' '.join(epic_oauth.IMPORT_SCOPES)
     assert result['expires_in'] == 600
     assert 'code_verifier' not in params and 'alice' not in result['authorization_url']
     with sqlite3.connect(store.path) as db:

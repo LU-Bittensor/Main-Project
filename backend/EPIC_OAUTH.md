@@ -1,6 +1,6 @@
 # Epic Sandbox connection
 
-The live frontend now starts authorization, handles Epic's callback, and exchanges the code through the Python API. The connection is bound to the verified MediLink account that initiated it. **No FHIR resources are retrieved and no medical records are written.**
+The live frontend now starts authorization, handles Epic's callback, and exchanges the code through the Python API. The connection is bound to the verified MediLink account that initiated it. The import page now offers account-bound retrieval and encrypted local import snapshots; see [Epic import testing](EPIC_IMPORT.md).
 
 ## Configuration and local test
 
@@ -11,7 +11,7 @@ EPIC_CLIENT_ID=<your Epic application's non-production client ID>
 EPIC_REDIRECT_URI=http://127.0.0.1:5173/external-import/callback
 ```
 
-Register that exact redirect with Epic. This implementation supports a **public patient-facing standalone SMART client using S256 PKCE**, without a client secret. Confidential registrations requiring a client secret or private-key JWT need matching client authentication added before they can work. Configure the Patient read API in your registration. Requested scopes are `launch/patient patient/Patient.read`; other record types will require additional APIs/scopes later.
+Register that exact redirect with Epic. This implementation supports a **public patient-facing standalone SMART client using S256 PKCE**, without a client secret. Confidential registrations requiring a client secret or private-key JWT need matching client authentication added before they can work. Configure the Patient read API in your registration. Requested scopes are `launch/patient` plus `patient/Patient.read`, `patient/Observation.read`, `patient/Condition.read`, `patient/MedicationRequest.read`, and `patient/Encounter.read`. Enable the corresponding R4 APIs, including both vital-sign and lab Observation searches. Reconnect older Patient-only authorizations before importing.
 
 1. Start the backend with `./start_backend.sh` from `backend`, and the frontend with `npm run dev` from `frontend`.
 2. Use the frontend at the exact origin in the redirect URI (here `http://127.0.0.1:5173`). Mixing `localhost` and `127.0.0.1` loses the origin-bound Supabase session on return. Use a real MediLink login; disable frontend `VITE_GRANT_DEMO` and backend fixture mode.
@@ -36,9 +36,10 @@ Example status:
 {
   "token_exchange_succeeded": true,
   "ready_for_transfer": true,
-  "reason": "Authorization is ready for a future Patient data transfer. No records have been retrieved.",
+  "ready_for_import": true,
+  "reason": "Ready to import your authorized sandbox records.",
   "expires_at": 1792000000,
-  "scopes": ["patient/Patient.read"],
+  "scopes": ["patient/Patient.read", "patient/Observation.read", "patient/Condition.read", "patient/MedicationRequest.read", "patient/Encounter.read"],
   "patient_context_received": true
 }
 ```
@@ -68,4 +69,4 @@ References: [Epic OAuth documentation](https://fhir.epic.com/Documentation?docId
 
 Apply `supabase/migrations/20261015120000_ehr_intake.sql` after the existing migrations, using the Supabase SQL editor or your normal migration workflow. It adds connections, import jobs/steps, current FHIR resources, automatic resource-version history, and nullable links on `records`. Run `supabase/tests/ehr_intake.sql` on a local/staging database to exercise ownership, deduplication, history, and compatibility; its fixtures roll back.
 
-This migration does not move the existing SQLite OAuth connections, implement retrieval, or change the current document MIME/size limits. The future importer must reuse a stable connection, canonicalize provider URLs and resource JSON, compute SHA-256 content hashes, set import timestamps, verify patient context, and create catalog/attachment records. Store source timestamps and partial dates unchanged in JSON even when no SQL timestamp can represent them. Keep credentials in backend-only encrypted storage. Shared reads must go through backend grant checks, including FHIR payloads, rather than adding broad recipient RLS policies. Regenerate Supabase TypeScript types after applying the migration.
+The new importer stores encrypted account-owned snapshots locally, independently of this prepared cloud schema. This migration does not move those SQLite connections/snapshots or change the current document MIME/size limits. The future importer must reuse a stable connection, canonicalize provider URLs and resource JSON, compute SHA-256 content hashes, set import timestamps, verify patient context, and create catalog/attachment records. Store source timestamps and partial dates unchanged in JSON even when no SQL timestamp can represent them. Keep credentials in backend-only encrypted storage. Shared reads must go through backend grant checks, including FHIR payloads, rather than adding broad recipient RLS policies. Regenerate Supabase TypeScript types after applying the migration.
