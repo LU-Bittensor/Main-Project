@@ -209,7 +209,9 @@ def test_authenticated_routes_reject_overrides_and_other_accounts(tmp_path, monk
     assert client.post(endpoint, headers=headers, json={'user_id': bob}).status_code == 400
     assert client.get(endpoint + '?user_id=' + alice, headers=headers).status_code == 400
     result = client.post(endpoint, headers=headers, json={})
-    assert result.status_code == 202 and result.json['status'] == 'completed'
+    assert result.status_code == 409  # New imports require Hippius and an enrolled browser vault.
+    imports.client_storage = False  # Seed a historical import for legacy read/isolation assertions.
+    imports.start(alice)
     assert result.headers['Cache-Control'] == 'no-store'
     assert client.get(endpoint, headers={'Authorization': 'Bearer bob'}).json['status'] == 'idle'
     assert client.post(endpoint, headers={'Authorization': 'Bearer bob'}, json={}).status_code == 409
@@ -222,3 +224,46 @@ def test_authenticated_routes_reject_overrides_and_other_accounts(tmp_path, monk
     demo = grant_api.create_app(dev=True, data_dir=tmp_path / 'demo', master_key=b'k' * 32).test_client()
     assert demo.get(endpoint, headers={'Authorization': 'Bearer demo-patient'}).status_code == 403
     assert demo.get(records, headers={'Authorization': 'Bearer demo-patient'}).status_code == 403
+
+
+def test_browser_handoff_never_persists_clinical_payload_and_clears_on_ack(setup):
+    oauth, imports = setup
+    imports.client_storage = True
+    job = imports.start('alice')
+    assert job['status'] == 'awaiting_encryption'
+    assert imports.start('alice')['id'] == job['id']
+    with pytest.raises(EpicImportError): imports.transfer('bob', job['id'])
+    payload = imports.transfer('alice', job['id'])
+    assert payload['format'] == 'medilink-epic-snapshot-v1'
+    assert payload['records'][0]['value'] == '72'
+    assert payload['bundle']['entry'][0]['resource']['resourceType'] == 'Patient'
+    with sqlite3.connect(oauth.path) as db:
+        assert db.execute('SELECT payload,digest FROM epic_import_jobs').fetchone() == (None, None)
+    for secret in (b'Pulse', b'Synthetic name'):
+        assert secret not in oauth.path.read_bytes()
+    held = imports.pending[job['id']]['raw']
+    done = imports.finish('alice', job['id'])
+    assert done['client_encrypted'] and done['record_id'] == job['id']
+    assert not imports.pending and not any(held)
+    assert imports.finish('alice', job['id']) == done
+    with pytest.raises(EpicImportError): imports.transfer('alice', job['id'])
+    assert EpicImports(oauth.path, oauth.key, oauth, client_storage=True).status('alice') == done
+
+
+def test_browser_handoff_expiry_and_restart_fail_without_leaking_payload(setup):
+    oauth, imports = setup
+    imports.client_storage = True
+    job = imports.start('alice')
+    item = imports.pending[job['id']]
+    item['timer'].cancel()
+    imports._expire(job['id'])
+    assert not any(item['raw'])
+    assert imports.status('alice')['status'] == 'failed'
+    with pytest.raises(EpicImportError): imports.transfer('alice', job['id'])
+    imports.transport = remote()
+    job = imports.start('alice')
+    restarted = EpicImports(oauth.path, oauth.key, oauth, client_storage=True)
+    assert restarted.status('alice')['status'] == 'failed'
+    with pytest.raises(EpicImportError): restarted.transfer('alice', job['id'])
+    imports.pending[job['id']]['timer'].cancel()
+    imports._expire(job['id'])

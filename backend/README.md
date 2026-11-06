@@ -1,6 +1,6 @@
 # MediLink backend
 
-> New manually uploaded Hippius documents now use browser-side X25519 key wrapping and AES-GCM encryption. Apply the additional migration and follow [Client document encryption](CLIENT_DOCUMENT_ENCRYPTION.md). Older files and Epic reports retain their existing path.
+> New manual uploads and Epic snapshots now use browser-side X25519 key wrapping and AES-GCM encryption. Apply the additional migration and follow [Client document encryption](CLIENT_DOCUMENT_ENCRYPTION.md). Older files and historical Epic reports retain their existing path. See [Epic client storage](EPIC_CLIENT_STORAGE.md) for the new import flow.
 
 
 This directory contains the Python API, blockchain tooling, Supabase database assets, and server-only TypeScript helpers.
@@ -110,4 +110,4 @@ The TypeScript admin/auth/cron helpers currently have no application callers; th
 
 ## Hippius encrypted document storage
 
-See [HIPPIUS_STORAGE.md](HIPPIUS_STORAGE.md) for the new private per-patient buckets, encrypted file content, Supabase pointer migration, configuration and test commands. Enable with `DOCUMENT_STORAGE_BACKEND=hippius` only after applying the storage migration. Existing Supabase files remain readable; Epic resource retrieval is still disabled.
+See [HIPPIUS_STORAGE.md](HIPPIUS_STORAGE.md) for the new private per-patient buckets, encrypted file content, Supabase pointer migration, configuration and test commands. Enable with `DOCUMENT_STORAGE_BACKEND=hippius` only after applying the storage migration. Existing Supabase files remain readable; new Epic retrieval uses the [browser-encrypted Hippius snapshot flow](EPIC_CLIENT_STORAGE.md).

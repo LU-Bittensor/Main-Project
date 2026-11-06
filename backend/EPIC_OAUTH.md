@@ -1,6 +1,6 @@
 # Epic Sandbox connection
 
-The live frontend now starts authorization, handles Epic's callback, and exchanges the code through the Python API. The connection is bound to the verified MediLink account that initiated it. The import page now offers account-bound retrieval and encrypted local import snapshots; see [Epic import testing](EPIC_IMPORT.md).
+The live frontend now starts authorization, handles Epic's callback, and exchanges the code through the Python API. The connection is bound to the verified MediLink account that initiated it. The import page now offers account-bound retrieval and browser-encrypted Hippius snapshots; see [Epic client storage](EPIC_CLIENT_STORAGE.md).
 
 ## Configuration and local test
 

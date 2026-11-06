@@ -61,7 +61,9 @@ class FakeCatalog:
             return [copy.deepcopy(row)]
         rows = self.tables[table]
         matched = [r for r in rows if all(str(r.get(k)) == v[3:] for k, v in params.items() if isinstance(v, str) and v.startswith('eq.'))]
-        if method == 'GET': return copy.deepcopy(matched)
+        if method == 'GET':
+            offset = int(params.get('offset', 0)); limit = int(params.get('limit', len(matched)))
+            return copy.deepcopy(matched[offset:offset+limit])
         if method == 'POST':
             if table == 'patient_storage' and any(r['owner_id'] == json['owner_id'] for r in rows): return []
             row = {'id': str(uuid.uuid4()), 'status': 'provisioning' if table == 'patient_storage' else 'pending', **json}

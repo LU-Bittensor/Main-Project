@@ -1,5 +1,9 @@
 # Epic import through the MediLink frontend
 
+**Current flow:** New imports use [browser encryption and Hippius storage](EPIC_CLIENT_STORAGE.md). Follow that guide for current setup, limits, sharing and testing. The server-stored workflow and results below are historical and apply to pre-upgrade snapshots only.
+
+## Historical implementation and validation (before November 6)
+
 This connects the existing `/external-import` page to authenticated FHIR retrieval. It uses the same Patient/Observation/Condition/MedicationRequest/Encounter fetcher validated against three Epic sandbox patients in commit `6a37d96` on `testnet`. That shared pipeline lives in `subnet-template/` on this branch. No fixture data is substituted for live responses.
 
 ## Local browser test

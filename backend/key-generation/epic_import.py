@@ -1,4 +1,4 @@
-"""Account-scoped sandbox import jobs. FHIR payloads stay encrypted on the server."""
+"""Account-scoped sandbox import jobs. New imports use a bounded, expiring browser-encryption handoff."""
 from collections import Counter
 from contextlib import closing
 import hashlib
@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
-from threading import BoundedSemaphore, Thread
+from threading import BoundedSemaphore, Thread, RLock, Timer
 import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
@@ -66,11 +66,14 @@ def clinical_records(payload):
 
 
 class EpicImports:
-    def __init__(self, path, key, oauth, *, transport=None, launch=None):
+    def __init__(self, path, key, oauth, *, transport=None, launch=None, client_storage=False):
         self.path, self.key, self.oauth = path, key, oauth
         self.transport = transport or live.request_json
         self.launch = launch or (lambda task: Thread(target=task, daemon=True).start())
         self.slots = BoundedSemaphore(2)
+        self.client_storage = client_storage
+        self.pending = {}
+        self.pending_lock = RLock()
         with closing(sqlite3.connect(path)) as db, db:
             db.execute('''CREATE TABLE IF NOT EXISTS epic_import_jobs (
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL, status TEXT NOT NULL,
@@ -78,7 +81,7 @@ class EpicImports:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS epic_active_import ON epic_import_jobs(user_id) WHERE status='running'")
             # A restarted single-process API cannot resume an in-memory worker/token.
             summary = json.dumps({'status': 'failed', 'message': 'The API restarted during import. Start a new import.'})
-            db.execute("UPDATE epic_import_jobs SET status='failed', summary=? WHERE status='running'", (summary,))
+            db.execute("UPDATE epic_import_jobs SET status='failed', summary=? WHERE status IN ('running','awaiting_encryption')", (summary,))
 
     def _read_payload(self, user_id, row):
         try:
@@ -125,7 +128,48 @@ class EpicImports:
                 'mapping_warning_count': len(payload['audit']['warnings']),
                 'coverage_note': summary.get('coverage_note'), 'snapshot_id': row[0]}
 
+    def transfer(self, user_id, job_id):
+        with self.pending_lock:
+            item = self.pending.get(job_id)
+            if not item or item['user'] != user_id:
+                raise EpicImportError('Import handoff expired or unavailable. Start a new import.')
+            return json.loads(item['raw'])
+
+    def _expire(self, job_id):
+        with self.pending_lock:
+            item = self.pending.pop(job_id, None)
+            if item:
+                item['raw'][:] = b'\x00' * len(item['raw'])
+                self._update(job_id, {'id': job_id, 'status': 'failed',
+                    'message': 'Browser encryption was not completed within 10 minutes. Start a new import.'})
+
+    def finish(self, user_id, job_id):
+        with self.pending_lock, closing(sqlite3.connect(self.path)) as db, db:
+            row = db.execute('SELECT status, summary FROM epic_import_jobs WHERE id=? AND user_id=?', (job_id, user_id)).fetchone()
+            if not row or row[0] not in ('awaiting_encryption', 'completed', 'failed'):
+                raise EpicImportError('Import job unavailable.')
+            result = {'id': job_id, 'record_id': job_id, 'status': 'completed',
+                      'message': 'Epic snapshot encrypted in your browser and saved to Hippius.',
+                      'completed_steps': 6, 'total_steps': 6, 'completed_at': int(time.time()),
+                      'client_encrypted': True}
+            if row[0] == 'completed':
+                return json.loads(row[1])
+            db.execute('UPDATE epic_import_jobs SET status=?, summary=?, payload=NULL, digest=NULL WHERE id=?',
+                       ('completed', json.dumps(result), job_id))
+            item = self.pending.pop(job_id, None)
+            if item:
+                item['timer'].cancel()
+                item['raw'][:] = b'\x00' * len(item['raw'])
+            return result
+
     def start(self, user_id):
+        if self.client_storage:
+            with self.pending_lock:
+                for job_id, item in self.pending.items():
+                    if item['user'] == user_id:
+                        return self.status(user_id)
+                if len(self.pending) >= 2:
+                    raise EpicImportError('The import handoff is busy. Please try again shortly.')
         credentials = self.oauth.for_import(user_id)
         if not self.slots.acquire(blocking=False):
             raise EpicImportError('The import service is busy. Please try again shortly.')
@@ -188,6 +232,27 @@ class EpicImports:
             audit = reconcile.reconcile_bundle(bundle, normalized)
             if audit['status'] == 'failed':
                 raise EpicImportError('Imported records did not pass the saved-data checks. Please retry.')
+            if self.client_storage:
+                # Clinical values, raw FHIR and audit details are all inside the encrypted snapshot.
+                payload = {'format': 'medilink-epic-snapshot-v1', 'bundle': bundle,
+                    'normalized': normalized, 'audit': audit, 'outcomes': outcomes,
+                    'imported_at': int(time.time()),
+                    'coverage_note': 'Includes records available to your authorized Epic account; some categories may be empty.'}
+                payload['records'] = clinical_records(payload)
+                raw = bytearray(canonical(payload))
+                if len(raw) > 10485760:
+                    raise EpicImportError('This snapshot exceeds the 10 MB encrypted-document limit. No records were saved.')
+                with self.pending_lock:
+                    if len(self.pending) >= 2:
+                        raise EpicImportError('The import handoff is busy. Please retry.')
+                    timer = Timer(600, self._expire, args=(job_id,))
+                    timer.daemon = True
+                    self.pending[job_id] = {'user': user_id, 'raw': raw, 'timer': timer}
+                    self._update(job_id, {'id': job_id, 'status': 'awaiting_encryption',
+                        'message': 'Ready for browser encryption. Keep this page open and your vault unlocked.',
+                        'completed_steps': 6, 'total_steps': 6})
+                    timer.start()
+                return
             raw = canonical({'bundle': bundle, 'normalized': normalized, 'audit': audit, 'outcomes': outcomes})
             if len(raw) > 40_000_000:
                 raise EpicImportError('This sandbox import exceeds the supported size. No records were saved.')

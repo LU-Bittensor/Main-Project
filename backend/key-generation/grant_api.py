@@ -225,7 +225,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     db_path.chmod(0o600)
     epic_oauth = EpicOAuth(db_path, master_key, os.getenv("EPIC_CLIENT_ID", "").strip(),
                            os.getenv("EPIC_REDIRECT_URI", "").strip())
-    epic_imports = EpicImports(db_path, master_key, epic_oauth)
+    epic_imports = EpicImports(db_path, master_key, epic_oauth, client_storage=True)
     app.extensions['epic_imports'] = epic_imports
 
     document_store_class = SupabaseDocumentStore
@@ -722,11 +722,43 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         try:
             if request.method == "GET":
                 return jsonify(epic_imports.status(g.uid))
+            if not getattr(documents, 'supports_client_encryption', False):
+                raise APIError('Epic imports require Hippius storage and browser encryption.', 409)
+            user = db().execute('SELECT x25519_public_key_b64 FROM users WHERE id=?', (g.uid,)).fetchone()
+            if not user or not user[0]:
+                raise APIError('Unlock and enroll your vault before importing.', 409)
             return jsonify(epic_imports.start(g.uid)), 202
         except EpicOAuthError as error:
             raise APIError(str(error), 409) from error
         except EpicImportError as error:
             raise APIError(str(error), 503) from error
+
+    def saved_epic_document(job_id):
+        document = documents.get(job_id)
+        return document if document and document['owner_id'] == g.uid and document.get('client_encrypted') and document['kind'] == 'Epic import' else None
+
+    @app.route('/api/external-import/epic/import/<job_id>/<action>', methods=['GET', 'POST'])
+    def epic_handoff(job_id, action):
+        if dev:
+            raise APIError('Use a real account for Epic imports.', 403)
+        if request.args or action not in ('payload', 'complete') or request.method != ('GET' if action == 'payload' else 'POST'):
+            raise APIError('Invalid import handoff request.', 400)
+        if action == 'complete' and request.get_json(silent=True) != {}:
+            raise APIError('No import overrides are accepted.', 400)
+        row = db().execute('SELECT id FROM epic_import_jobs WHERE id=? AND user_id=?', (job_id, g.uid)).fetchone()
+        if not row:
+            raise APIError('Import not found.', 404)
+        try:
+            saved = saved_epic_document(job_id)
+            if action == 'complete':
+                if not saved:
+                    raise APIError('Upload the browser-encrypted snapshot to Hippius first.', 409)
+                return jsonify(epic_imports.finish(g.uid, job_id))
+            if saved:
+                return jsonify(stored=True)
+            return jsonify(stored=False, snapshot=epic_imports.transfer(g.uid, job_id))
+        except EpicImportError as error:
+            raise APIError(str(error), 409) from error
 
     @app.get("/api/external-import/epic/records")
     def epic_records():
@@ -735,7 +767,15 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         if set(request.args) - {'category', 'page'} or any(len(request.args.getlist(key)) != 1 for key in request.args):
             raise APIError("Only category and page filters are accepted.")
         try:
-            return jsonify(epic_imports.records(g.uid, request.args.get('category', 'all'), int(request.args.get('page', '1'))))
+            category, page = request.args.get('category', 'all'), int(request.args.get('page', '1'))
+            if category not in ('all', 'vital-signs', 'laboratory', 'conditions', 'medications', 'encounters') or not 1 <= page <= 100000:
+                raise ValueError('Invalid filter')
+            if getattr(documents, 'supports_client_encryption', False):
+                snapshots = [r for r in documents.owned(g.uid) if r.get('client_encrypted') and r['kind'] == 'Epic import']
+                if snapshots:
+                    latest = max(snapshots, key=lambda r: r['created_at'])
+                    return jsonify(client_encrypted=True, record_id=latest['id'])
+            return jsonify(epic_imports.records(g.uid, category, page))
         except ValueError:
             raise APIError("Choose a valid record category and page.", 400) from None
         except EpicImportError as error:

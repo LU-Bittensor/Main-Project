@@ -33,6 +33,7 @@ def setup(tmp_path, monkeypatch):
     app = grant_api.create_app(data_dir=tmp_path, master_key=b'k' * 32)
     client = app.test_client()
     imports = app.extensions['epic_imports']
+    imports.client_storage = False  # Seed pre-upgrade snapshots to test legacy compatibility.
     seed(imports.oauth, IDS['owner'])
     imports.transport, imports.launch = remote(), lambda task: task()
     imports.start(IDS['owner'])
@@ -45,7 +46,7 @@ def report_id(client, who='owner'):
     result = client.get('/api/records', headers=headers(who))
     assert result.status_code == 200
     record = result.json[0]
-    assert record['kind'] == 'Epic import' and record['has_document']
+    assert record['kind'] == 'Epic import (legacy)' and record['has_document']
     assert record['mime_type'] == 'text/plain'
     assert 'Later imports are not included' in record['share_note']
     return record['id']

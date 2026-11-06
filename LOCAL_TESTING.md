@@ -233,3 +233,8 @@ Follow [backend/EPIC_OAUTH.md](backend/EPIC_OAUTH.md) to configure the public SM
 ## Hippius document storage
 
 The backend supports encrypted Hippius uploads with Supabase pointers. Apply the migration and follow [backend/HIPPIUS_STORAGE.md](backend/HIPPIUS_STORAGE.md) before enabling `DOCUMENT_STORAGE_BACKEND=hippius`. The standalone `check_hippius.py` checks a synthetic encrypted round trip and removes its temporary cloud bucket. Existing documents are not automatically migrated.
+
+
+## Browser-encrypted Epic imports
+
+New Epic imports require Hippius storage and an unlocked patient vault. Keep `/external-import` open through browser encryption and upload. No additional migration is needed beyond `20261106120000_client_document_encryption.sql`. Follow [Epic client storage](backend/EPIC_CLIENT_STORAGE.md) for setup, two-account sharing/revocation tests, expiry behavior and the single-process deployment requirement. Older local snapshots are not automatically converted.

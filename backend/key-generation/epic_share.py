@@ -38,7 +38,7 @@ class ImportDocumentStore:
         except (ValueError, AttributeError):
             return None
         with closing(sqlite3.connect(self.imports.path)) as db:
-            row = db.execute("SELECT id, summary, payload, digest, user_id FROM epic_import_jobs WHERE id=? AND status='completed'", (value,)).fetchone()
+            row = db.execute("SELECT id, summary, payload, digest, user_id FROM epic_import_jobs WHERE id=? AND status='completed' AND payload IS NOT NULL", (value,)).fetchone()
         if row is None or (owner is not None and row[4] != owner):
             return None
         return row
@@ -48,7 +48,7 @@ class ImportDocumentStore:
         date = datetime.fromtimestamp(summary['completed_at'], UTC)
         return {'id': PREFIX + row[0], 'owner_id': row[4],
                 'name': 'Epic Sandbox import ' + date.strftime('%Y-%m-%d %H:%M:%S UTC') + '.txt',
-                'kind': 'Epic import', 'created_at': date.isoformat(),
+                'kind': 'Epic import (legacy)', 'created_at': date.isoformat(),
                 'tags': ['Epic Sandbox', 'Saved import'], 'mime_type': 'text/plain',
                 'size': None, 'has_document': True,
                 'share_note': 'Shares all clinical records in this saved import. Later imports are not included.'}
@@ -57,7 +57,7 @@ class ImportDocumentStore:
         # A new import is a new immutable report. Existing grants keep pointing
         # to their original snapshot and never expand to newly fetched data.
         with closing(sqlite3.connect(self.imports.path)) as db:
-            row = db.execute("SELECT id, summary, payload, digest, user_id FROM epic_import_jobs WHERE user_id=? AND status='completed' ORDER BY created_at DESC, rowid DESC LIMIT 1", (owner,)).fetchone()
+            row = db.execute("SELECT id, summary, payload, digest, user_id FROM epic_import_jobs WHERE user_id=? AND status='completed' AND payload IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1", (owner,)).fetchone()
         snapshots = [self._metadata(row)] if row else []
         # A disabled document source must not block the configured local Epic
         # source. The API health response and UI explicitly disclose this state.

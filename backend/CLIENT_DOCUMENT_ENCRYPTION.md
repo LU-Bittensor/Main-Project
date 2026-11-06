@@ -25,7 +25,7 @@ Code: `frontend/src/lib/document-crypto.ts` implements crypto; `grant-api.ts` co
 
 ## Scope and limitations
 
-- Applies to **new manually uploaded Hippius documents**. Existing Supabase bytes, legacy server-encrypted Hippius documents, and server-generated Epic import reports are not converted. Epic retrieval still runs on the server. This is not an all-data end-to-end encryption claim.
+- Applies to **new manually uploaded Hippius documents and new Epic snapshots**; see [Epic client storage](EPIC_CLIENT_STORAGE.md). Existing Supabase bytes, legacy server-encrypted Hippius documents, and historical server-generated Epic import reports are not converted. Epic retrieval still runs on the server. This is not an all-data end-to-end encryption claim.
 - File names, tags, MIME types, sizes, account relationships and public keys remain visible metadata. The API cannot inspect encrypted file contents for malware or independently verify their MIME type.
 - Preserve the original encrypted vault and its unlock credentials. Replacing a vault/key does not migrate old document envelopes; automatic rotation/recovery is not implemented. New devices must recover the same private keys, not create a replacement vault.
 - Fingerprints are local browser pins. First contact depends on an actual independent comparison. Clearing browser storage loses pins. Account-directory compromise cannot be detected on first contact without that comparison.

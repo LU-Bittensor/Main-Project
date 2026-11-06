@@ -30,7 +30,7 @@ def document_type(name, content):
 
 
 def metadata(row):
-    return {**({'client_encrypted': True} if row.get('client_encrypted') else {}), **{k: row[k] for k in ('id', 'owner_id', 'name', 'kind', 'created_at')},
+    return {**({'share_note': 'Shares the complete encrypted Epic snapshot, including original patient identifiers and all included clinical records. Later imports are not included.'} if row.get('client_encrypted') and row.get('kind') == 'Epic import' else {}), **({'client_encrypted': True} if row.get('client_encrypted') else {}), **{k: row[k] for k in ('id', 'owner_id', 'name', 'kind', 'created_at')},
             'tags': [tag.strip() for tag in row.get('tags', '').split(',') if tag.strip()],
             'mime_type': row.get('file_mime_type'), 'size': row.get('file_size'),
             'has_document': row.get('file_mime_type') is not None}
