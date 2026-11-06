@@ -67,6 +67,7 @@ class Catalog(SupabaseDocumentStore):
 
 
 class HippiusDocumentStore(SupabaseDocumentStore):
+    supports_client_encryption = True
     def __init__(self, url, secret_key, *, s3=None, hash_key=None, master_key=None,
                  namespace=None, catalog=None, key_version='v1', anonymous=None):
         super().__init__(url, secret_key)
@@ -119,7 +120,7 @@ class HippiusDocumentStore(SupabaseDocumentStore):
                 result['Body'].close()
             raise ValueError('Anonymous storage access was not denied')
 
-    def _patient(self, owner, *, provision=True):
+    def _patient(self, owner, *, provision=True, need_key=True):
         rows = self.catalog.table('patient_storage', params={'owner_id': 'eq.' + owner, 'select': '*'})
         if not rows:
             if not provision:
@@ -138,7 +139,7 @@ class HippiusDocumentStore(SupabaseDocumentStore):
         patient = rows[0]
         if patient['namespace'] != self.namespace or patient['encryption_key_version'] != self.key_version:
             raise ValueError('Storage configuration mismatch')
-        key = unseal(self.master_key, base64.b64decode(patient['wrapped_key'], validate=True), 'patient-key:' + owner)
+        key = unseal(self.master_key, base64.b64decode(patient['wrapped_key'], validate=True), 'patient-key:' + owner) if need_key else None
         if not provision and patient['status'] != 'ready':
             raise ValueError('Patient storage not ready')
         self._private_bucket(patient['bucket_name'], create=patient['status'] == 'provisioning')
@@ -162,23 +163,28 @@ class HippiusDocumentStore(SupabaseDocumentStore):
         if len(encrypted) != obj['ciphertext_size'] or not hmac.compare_digest(
                 hashlib.sha256(encrypted).hexdigest(), obj['ciphertext_sha256']):
             raise ValueError('Object integrity failure')
+        if obj.get('encryption_format') == 'client-x25519-v1':
+            return encrypted
         plaintext = unseal(key, encrypted, self._context(obj['owner_id'], obj))
         if len(plaintext) != obj['plaintext_size']:
             raise ValueError('Object size mismatch')
         return plaintext
 
-    def add(self, owner, name, tags, mime, content, *, identifier=None, kind='Document', created_at=None):
+    def add(self, owner, name, tags, mime, content, *, identifier=None, kind='Document', created_at=None, client_info=None):
         try:
             owner = str(uuid.UUID(owner))
-            if not 0 < len(content) <= MAX_DOCUMENT_BYTES:
+            if not 0 < len(content) <= MAX_DOCUMENT_BYTES + (28 if client_info else 0):
                 raise ValueError('Invalid size')
-            patient, key = self._patient(owner)
+            patient, key = self._patient(owner, need_key=client_info is None)
             record_id = str(uuid.UUID(identifier)) if identifier else str(uuid.uuid4())
             object_id = str(uuid.uuid4())
             obj = {'id': object_id, 'owner_id': owner, 'patient_storage_id': patient['id'],
                    'object_key': 'documents/' + object_id + '.enc', 'mime_type': mime,
                    'plaintext_size': len(content), 'ciphertext_size': len(content) + 33}
-            encrypted = seal(key, content, self._context(owner, obj))
+            if client_info:
+                obj.update(plaintext_size=client_info['manifest']['size'], ciphertext_size=len(content),
+                           encryption_format='client-x25519-v1', client_info=client_info)
+            encrypted = content if client_info else seal(key, content, self._context(owner, obj))
             obj['ciphertext_sha256'] = hashlib.sha256(encrypted).hexdigest()
             self.catalog.table('storage_objects', 'POST', headers={'Prefer': 'return=representation'}, json=obj)
             self.s3.put_object(Bucket=patient['bucket_name'], Key=obj['object_key'], Body=encrypted,
@@ -211,9 +217,34 @@ class HippiusDocumentStore(SupabaseDocumentStore):
             if not objects:
                 raise ValueError('Missing ready object')
             obj = objects[0]
-            patient, key = self._patient(owner, provision=False)
+            patient, key = self._patient(owner, provision=False, need_key=obj.get('encryption_format') != 'client-x25519-v1')
             if obj['patient_storage_id'] != patient['id']:
                 raise ValueError('Patient storage mismatch')
             return self._download(patient, obj, key)
         except Exception:
             raise DocumentStorageError('Encrypted document is unavailable or failed integrity verification.') from None
+
+
+    def encryption_info(self, identifier, owner, recipient):
+        rows = self.request('GET', params={'id': 'eq.' + identifier, 'owner_id': 'eq.' + owner, 'select': 'storage_object_id'})
+        if not rows or not rows[0]['storage_object_id']:
+            return None
+        object_id = rows[0]['storage_object_id']
+        objects = self.catalog.table('storage_objects', params={'id': 'eq.' + object_id, 'owner_id': 'eq.' + owner, 'status': 'eq.ready', 'select': 'client_info'})
+        if not objects or not objects[0].get('client_info'):
+            return None
+        info = objects[0]['client_info']
+        if owner == recipient:
+            return info
+        envelopes = self.catalog.table('document_key_envelopes', params={'object_id': 'eq.' + object_id, 'recipient_id': 'eq.' + recipient, 'owner_id': 'eq.' + owner, 'select': 'envelope'})
+        if not envelopes:
+            raise DocumentStorageError('The owner must share a document key with your vault before you can open it.')
+        return {'manifest': info['manifest'], 'envelope': envelopes[0]['envelope']}
+
+    def save_envelope(self, identifier, owner, recipient, envelope):
+        rows = self.request('GET', params={'id': 'eq.' + identifier, 'owner_id': 'eq.' + owner, 'select': 'storage_object_id'})
+        if not rows or not rows[0]['storage_object_id']:
+            raise DocumentStorageError('Encrypted document unavailable.')
+        return self.catalog.table('document_key_envelopes', 'POST', params={'on_conflict': 'object_id,recipient_id'},
+            headers={'Prefer': 'resolution=merge-duplicates,return=representation'},
+            json={'object_id': rows[0]['storage_object_id'], 'owner_id': owner, 'recipient_id': recipient, 'envelope': envelope})

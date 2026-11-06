@@ -1,5 +1,8 @@
 # MediLink backend
 
+> New manually uploaded Hippius documents now use browser-side X25519 key wrapping and AES-GCM encryption. Apply the additional migration and follow [Client document encryption](CLIENT_DOCUMENT_ENCRYPTION.md). Older files and Epic reports retain their existing path.
+
+
 This directory contains the Python API, blockchain tooling, Supabase database assets, and server-only TypeScript helpers.
 
 ## Layout

@@ -1,6 +1,8 @@
 import base64
 import copy
 import io
+import json
+from pathlib import Path
 import uuid
 
 import pytest
@@ -43,7 +45,7 @@ class FakeAnonymous:
 
 class FakeCatalog:
     def __init__(self):
-        self.tables = {k: [] for k in ('patient_storage', 'storage_objects', 'records')}
+        self.tables = {k: [] for k in ('patient_storage', 'storage_objects', 'records', 'document_key_envelopes')}
         self.lose_publish_response = False
     def table(self, table, method='GET', params=None, json=None, headers=None):
         params = params or {}
@@ -52,7 +54,7 @@ class FakeCatalog:
             assert obj['status'] == 'uploaded' and obj['owner_id'] == json['p_owner']
             row = {'id': json['p_record'], 'owner_id': json['p_owner'], 'name': json['p_name'],
                    'kind': json['p_kind'], 'tags': json['p_tags'], 'created_at': 'now',
-                   'file_mime_type': obj['mime_type'], 'file_size': obj['plaintext_size'], 'storage_object_id': obj['id']}
+                   'client_encrypted': obj.get('encryption_format', 'aes256gcm-v1') == 'client-x25519-v1', 'file_mime_type': obj['mime_type'], 'file_size': obj['plaintext_size'], 'storage_object_id': obj['id']}
             self.tables['records'].append(row)
             obj['status'] = 'ready'
             if self.lose_publish_response: raise RuntimeError('timeout after commit')
@@ -194,11 +196,41 @@ def test_api_selects_hippius_and_keeps_authentication(setup, monkeypatch, tmp_pa
     client = grant_api.create_app(data_dir=tmp_path, master_key=b'g'*32).test_client()
     result = client.post('/api/records', headers={'Authorization': 'Bearer owner'},
                          data={'file': (io.BytesIO(b'private test'), 'visit.txt')})
-    assert result.status_code == 201
+    assert result.status_code == 409  # No plaintext fallback for Hippius uploads.
+    fixture = json.loads((Path(__file__).parent / 'fixtures/client_document.json').read_text())
+    info = fixture['info']; manifest = info['manifest']
+    ciphertext = base64.b64decode(fixture['ciphertext'])
+    enrolled = client.post('/api/enroll', headers={'Authorization': 'Bearer owner'}, json={
+        'evmAddress': manifest['owner_wallet'], 'x25519PublicKeyB64': manifest['owner_public_key']})
+    assert enrolled.status_code == 200
+    for invalid in ('{}', 'null', '[]'):
+        bad = client.post('/api/records', headers={'Authorization': 'Bearer owner'},
+            data={'file': (io.BytesIO(b'plaintext'), 'visit.txt'), 'client_info': invalid})
+        assert bad.status_code == 400
+    result = client.post('/api/records', headers={'Authorization': 'Bearer owner'},
+        data={'file': (io.BytesIO(ciphertext), 'visit.txt'), 'client_info': json.dumps(info)})
+    assert result.status_code == 201, result.json
     identifier = result.json['id']
+    encryption_url = '/api/records/' + identifier + '/encryption'
+    assert client.get(encryption_url, headers={'Authorization': 'Bearer owner'}).json['manifest'] == manifest
+    assert client.get(encryption_url, headers={'Authorization': 'Bearer other'}).status_code == 403
     assert s3.objects
     url = '/api/records/' + identifier + '/document'
     assert client.post(url).status_code == 401
     assert client.post(url, headers={'Authorization': 'Bearer other'}).status_code == 403
     response = client.post(url, headers={'Authorization': 'Bearer owner'})
-    assert response.data == b'private test' and response.headers['Cache-Control'] == 'no-store'
+    assert response.data == ciphertext and response.headers['Cache-Control'] == 'no-store'
+
+
+def test_client_ciphertext_is_stored_unchanged_and_does_not_use_server_key(setup):
+    make, catalog, s3 = setup
+    ciphertext = b'x' * 34
+    info = {'manifest': {'size': 6}, 'envelope': {'wrapped_key': 'opaque'}}
+    row = make().add(OWNER, 'file.txt', [], 'text/plain', ciphertext, client_info=info)
+    assert row['client_encrypted'] is True
+    assert list(s3.objects.values()) == [ciphertext]
+    assert make(b'z'*32).read(row['id'], OWNER) == ciphertext
+    assert make().encryption_info(row['id'], OWNER, OWNER) == info
+    with pytest.raises(DocumentStorageError): make().encryption_info(row['id'], OWNER, OTHER)
+    make().save_envelope(row['id'], OWNER, OTHER, {'wrapped_key': 'recipient-opaque'})
+    assert make().encryption_info(row['id'], OWNER, OTHER)['envelope']['wrapped_key'] == 'recipient-opaque'

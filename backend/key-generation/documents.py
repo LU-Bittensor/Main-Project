@@ -5,7 +5,7 @@ import uuid
 import requests
 
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
-METADATA_COLUMNS = 'id,owner_id,name,kind,tags,file_mime_type,file_size,created_at'
+METADATA_COLUMNS = 'id,owner_id,name,kind,tags,file_mime_type,file_size,created_at,client_encrypted'
 
 
 class DocumentStorageError(Exception):
@@ -30,7 +30,7 @@ def document_type(name, content):
 
 
 def metadata(row):
-    return {**{k: row[k] for k in ('id', 'owner_id', 'name', 'kind', 'created_at')},
+    return {**({'client_encrypted': True} if row.get('client_encrypted') else {}), **{k: row[k] for k in ('id', 'owner_id', 'name', 'kind', 'created_at')},
             'tags': [tag.strip() for tag in row.get('tags', '').split(',') if tag.strip()],
             'mime_type': row.get('file_mime_type'), 'size': row.get('file_size'),
             'has_document': row.get('file_mime_type') is not None}

@@ -1,5 +1,8 @@
 # Encrypted Hippius document storage
 
+> New manually uploaded Hippius documents now use browser-side X25519 key wrapping and AES-GCM encryption. Apply the additional migration and follow [Client document encryption](CLIENT_DOCUMENT_ENCRYPTION.md). Older files and Epic reports retain their existing path.
+
+
 This first implementation sends new patient document uploads to a private per-patient Hippius bucket. Supabase retains record metadata and backend-only object pointers. Files are encrypted in the API before upload and decrypted only after the existing owner/shared-grant checks. No presigned links, S3 credentials, or encryption keys are returned to the browser.
 
 ## Enable

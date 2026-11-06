@@ -16,6 +16,20 @@ class ImportDocumentStore:
         self.documents, self.imports = documents, imports
         self.uploads_configured = uploads_configured
 
+    @property
+    def supports_client_encryption(self):
+        return getattr(self.documents, 'supports_client_encryption', False)
+
+    def encryption_info(self, identifier, owner, recipient):
+        if identifier.startswith(PREFIX) or not self.supports_client_encryption:
+            return None
+        return self.documents.encryption_info(identifier, owner, recipient)
+
+    def save_envelope(self, identifier, owner, recipient, envelope):
+        if identifier.startswith(PREFIX) or not self.supports_client_encryption:
+            raise DocumentStorageError('This source does not support client document encryption.')
+        return self.documents.save_envelope(identifier, owner, recipient, envelope)
+
     def _snapshot(self, identifier, owner=None):
         value = identifier.removeprefix(PREFIX)
         try:

@@ -17,6 +17,7 @@ import requests
 from eth_account import Account
 from eth_utils import is_address, to_checksum_address
 from flask import Flask, Response, g, jsonify, request
+from client_document_crypto import validate_upload, validate_envelope
 from documents import SupabaseDocumentStore, DemoDocumentStore, DocumentStorageError, MAX_DOCUMENT_BYTES, document_type
 from werkzeug.exceptions import HTTPException
 from epic_oauth import EpicOAuth, EpicOAuthError
@@ -522,23 +523,25 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         if not address:
             app.logger.warning("No AccessRegistry address configured for on-chain document checks")
             return False
-        try:
-            chain.validate_registry(address)
-            allowed = bool(
-                chain.has_grant(address, vault_record_resource_id(record_id), user["wallet"])
-            )
-            if allowed and not setting("registry_address"):
-                setting("registry_address", address)
-            return allowed
-        except Exception:
-            app.logger.exception("On-chain grant check failed for record %s", record_id[:8])
+        document = documents.get(record_id)
+        if not document:
             return False
+        owner = db().execute("SELECT wallet FROM users WHERE id=?", (document['owner_id'],)).fetchone()
+        if not owner or not hasattr(chain, 'wallet_resource'):
+            return False
+        # A grant on a resource claimed by an unrelated wallet is insufficient.
+        # RPC failure propagates as 503; never release content or envelopes.
+        return bool(chain.wallet_resource(address, record_id, owner['wallet'], user['wallet']))
 
     def recipient_can_view_record(record_id: str, recipient_id: str) -> bool:
-        return (
-            recipient_has_api_grant(record_id, recipient_id) is not None
-            or recipient_has_on_chain_grant(record_id, recipient_id)
-        )
+        permitted = recipient_has_api_grant(record_id, recipient_id)
+        if permitted:
+            try:
+                access(permitted['id'])
+                return True
+            except APIError:
+                pass
+        return recipient_has_on_chain_grant(record_id, recipient_id)
 
     def reconcile(row):
         if row["status"] == "revoking":
@@ -863,18 +866,43 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         tags = list(dict.fromkeys(tag.strip() for tag in raw_tags.split(",") if tag.strip()))
         if len(tags) > 20 or any(len(tag) > 50 for tag in tags):
             raise APIError("Use at most 20 tags, each up to 50 characters")
-        content = upload.read(MAX_DOCUMENT_BYTES + 1)
+        client_info = None
+        raw_crypto = request.form.get("client_info")
+        if raw_crypto:
+            if dev or not getattr(documents, "supports_client_encryption", False):
+                raise APIError("Client-encrypted uploads require Hippius storage.", 409)
+            if len(raw_crypto) > 8192:
+                raise APIError("Encryption metadata is too large.")
+            try:
+                client_info = json.loads(raw_crypto)
+                if not isinstance(client_info, dict) or set(client_info) != {"manifest", "envelope"}:
+                    raise ValueError("Invalid encryption metadata")
+            except ValueError:
+                raise APIError("Invalid encryption metadata.") from None
+        elif not dev and getattr(documents, "supports_client_encryption", False):
+            raise APIError("Unlock your vault and upload with browser-side document encryption.", 409)
+        content = upload.read(MAX_DOCUMENT_BYTES + 29)
         if not content:
             raise APIError("The document is empty")
-        if len(content) > MAX_DOCUMENT_BYTES:
+        if len(content) > MAX_DOCUMENT_BYTES + (28 if client_info else 0):
             raise APIError("Documents must be 10 MB or smaller", 413)
         try:
-            mime = document_type(name, content)
-        except ValueError as error:
-            raise APIError(str(error)) from error
+            if client_info:
+                user = db().execute("SELECT * FROM users WHERE id=?", (g.uid,)).fetchone()
+                if not user or not user['x25519_public_key_b64']:
+                    raise ValueError("Unlock and enroll your vault before uploading.")
+                validate_upload(client_info, content, g.uid, user['wallet'], user['x25519_public_key_b64'])
+                mime = client_info['manifest']['mime']
+            else:
+                mime = document_type(name, content)
+        except (ValueError, TypeError, KeyError):
+            raise APIError("Invalid document or encryption envelope. Unlock and enroll your original vault.") from None
         kind = (request.form.get("kind") or "Document").strip() or "Document"
         if len(kind) > 50 or any(ord(c) < 32 for c in kind):
             raise APIError("Use a record type of 1–50 characters without control characters")
+        if client_info:
+            return jsonify(documents.add(g.uid, name, tags, mime, content, kind=kind,
+                identifier=client_info['manifest']['record_id'], client_info=client_info)), 201
         return jsonify(documents.add(g.uid, name, tags, mime, content, kind=kind)), 201
 
     @app.get("/api/records/<record_id>")
@@ -887,6 +915,41 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             if document["owner_id"] != g.uid and not recipient_can_view_record(record_id, g.uid):
                 raise APIError("Record not found or access denied", 403)
             return jsonify(document)
+
+    @app.route("/api/records/<record_id>/encryption", methods=["GET", "POST"])
+    def document_encryption(record_id):
+        with lock:
+            document = documents.get(record_id)
+            if document is None:
+                raise APIError("Record not found", 404)
+            owner = document['owner_id']
+            if request.method == 'POST' and owner != g.uid:
+                raise APIError("Only the owner can share document keys", 403)
+            if owner != g.uid and not recipient_can_view_record(record_id, g.uid):
+                raise APIError("Record not found or access denied", 403)
+            if not hasattr(documents, 'encryption_info'):
+                if request.method == 'POST':
+                    raise APIError("This document does not use client encryption", 409)
+                return jsonify(client_encrypted=False)
+            info = documents.encryption_info(record_id, owner, g.uid)
+            if not info:
+                if document.get('client_encrypted') or request.method == 'POST':
+                    raise APIError("Client encryption metadata unavailable", 409)
+                return jsonify(client_encrypted=False)
+            if request.method == 'GET':
+                return jsonify(client_encrypted=True, **info)
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict) or set(body) != {'recipient_id', 'envelope'} or not isinstance(body.get('recipient_id'), str):
+                raise APIError("Expected recipient_id and encrypted key envelope")
+            peer = db().execute("SELECT * FROM users WHERE id=?", (body['recipient_id'],)).fetchone()
+            if not peer or not peer['x25519_public_key_b64']:
+                raise APIError("Recipient must unlock and enroll their vault", 409)
+            try:
+                validate_envelope(info['manifest'], body['envelope'], peer['id'], peer['x25519_public_key_b64'])
+            except (ValueError, TypeError, KeyError):
+                raise APIError("Invalid signed document key envelope") from None
+            documents.save_envelope(record_id, owner, peer['id'], body['envelope'])
+            return jsonify(saved=True)
 
     @app.post("/api/records/<record_id>/document")
     def view_document(record_id):
@@ -911,7 +974,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                     allowed = True
                 if not allowed:
                     raise APIError("Document not found or access denied", 403)
-            response = Response(documents.read(record_id, document["owner_id"]), mimetype=document["mime_type"])
+            response = Response(documents.read(record_id, document["owner_id"]), mimetype="application/octet-stream" if document.get("client_encrypted") else document["mime_type"])
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
             return response

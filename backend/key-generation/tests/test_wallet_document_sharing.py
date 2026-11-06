@@ -60,3 +60,17 @@ def test_rpc_outage_never_releases_document(shared):
     chain.offline = True
     assert client.get('/api/grants', headers=headers('clinician')).status_code == 503
     assert client.post('/api/records/'+doc['id']+'/document', headers=headers('clinician')).status_code == 503
+
+
+def test_encryption_metadata_uses_live_grant_and_owner_checks(shared):
+    client, chain, doc, wallets = shared
+    url = '/api/records/' + doc['id'] + '/encryption'
+    assert client.get(url, headers=headers('clinician')).status_code == 200
+    assert client.post(url, headers=headers('clinician'), json={}).status_code == 403
+    chain.shares[0]['active'] = False
+    assert client.get(url, headers=headers('clinician')).status_code == 403
+    chain.shares[0]['active'] = True
+    chain.shares[0]['owner_wallet'] = wallets['outsider']
+    assert client.get(url, headers=headers('clinician')).status_code == 403
+    chain.offline = True
+    assert client.get(url, headers=headers('clinician')).status_code == 503
