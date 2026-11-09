@@ -238,3 +238,45 @@ The backend supports encrypted Hippius uploads with Supabase pointers. Apply the
 ## Browser-encrypted Epic imports
 
 New Epic imports require Hippius storage and an unlocked patient vault. Keep `/external-import` open through browser encryption and upload. No additional migration is needed beyond `20261106120000_client_document_encryption.sql`. Follow [Epic client storage](backend/EPIC_CLIENT_STORAGE.md) for setup, two-account sharing/revocation tests, expiry behavior and the single-process deployment requirement. Older local snapshots are not automatically converted.
+
+
+## Local encrypted document storage (no Hippius account required)
+
+For the real-account import/share/revoke wiring test, set this in the untracked
+`backend/key-generation/.env`, then restart the API:
+
+```dotenv
+DOCUMENT_STORAGE_BACKEND=local
+```
+
+Use `bash load_API_epic.sh` from `backend/key-generation` for real Supabase accounts
+without a blockchain. Install its requirements into `.venv` first, as above.
+Ensure the backend Supabase URL/publishable key match the frontend's project.
+Keep the API bound to loopback. The frontend automatically uses API grants when
+the API health endpoint says blockchain mode is off, even if an old registry
+address remains in frontend configuration.
+
+The browser encrypts imports/uploads and signs recipient key envelopes exactly
+as with Hippius. The local store persists ciphertext, metadata and envelopes in
+`GRANT_DATA_DIR/local-documents.sqlite3` (owner-only filesystem permissions).
+No Supabase service secret or Hippius credentials are needed for document storage;
+Supabase still verifies real logins and the patient's upload role. Existing grant
+checks authorize every delivery and revocation blocks future key/file reads.
+Document names and metadata remain readable by the local server, as with the
+cloud-backed catalogue. Private vault keys and plaintext documents are not stored
+in the document database.
+
+Use two browser profiles for patient and provider. As patient, complete an Epic
+Sandbox import (or upload a synthetic text file), select the saved record in
+Access ledger, verify the recipient fingerprint and grant access. As provider,
+refresh and open the incoming receipt. Revoke as patient and confirm subsequent
+opens are denied. No wallet transactions are claimed in this mode. Back up the
+whole private data directory with its master key; deleting it loses local records.
+Keep the API running while testing. This is an explicit development option and
+never silently replaces configured Hippius storage. Switching storage backends
+does not migrate document bytes or grants; use the original backend to reopen
+its records. Production Hippius integration still requires its credentials and
+migrations.
+
+Tests: `python -m pytest tests/test_local_documents.py tests/test_epic_client_storage.py -q`.
+The encrypted Epic test runs against both local and simulated Hippius storage.

@@ -228,16 +228,21 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
     epic_imports = EpicImports(db_path, master_key, epic_oauth, client_storage=True)
     app.extensions['epic_imports'] = epic_imports
 
-    document_store_class = SupabaseDocumentStore
     storage_backend = os.getenv("DOCUMENT_STORAGE_BACKEND", "supabase")
-    if not dev and storage_backend == "hippius":
+    server_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if dev:
+        documents = DemoDocumentStore()
+    elif storage_backend == "local":
+        from local_documents import LocalDocumentStore
+        documents = LocalDocumentStore(directory)
+    elif storage_backend == "hippius":
         from hippius_storage import HippiusDocumentStore
-        document_store_class = HippiusDocumentStore
-    elif not dev and storage_backend != "supabase":
+        documents = HippiusDocumentStore(supabase_url, server_key)
+    elif storage_backend == "supabase":
+        documents = SupabaseDocumentStore(supabase_url, server_key)
+    else:
         raise ValueError("Unknown DOCUMENT_STORAGE_BACKEND")
-    documents = DemoDocumentStore() if dev else document_store_class(
-        supabase_url, os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
-    uploads_configured = dev or bool(os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+    uploads_configured = dev or storage_backend == "local" or bool(server_key)
     if not dev:
         documents = ImportDocumentStore(documents, epic_imports, uploads_configured)
 
@@ -662,6 +667,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             protocol="dh-registry-v1",
             registry_address=registry_address_for_checks() if chain else setting("registry_address"),
             document_uploads_configured=uploads_configured,
+            document_storage_backend="demo" if dev else storage_backend,
         )
 
     @app.post("/api/registry/resolve")
@@ -910,7 +916,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         raw_crypto = request.form.get("client_info")
         if raw_crypto:
             if dev or not getattr(documents, "supports_client_encryption", False):
-                raise APIError("Client-encrypted uploads require Hippius storage.", 409)
+                raise APIError("Client-encrypted uploads require an encrypted document store.", 409)
             if len(raw_crypto) > 8192:
                 raise APIError("Encryption metadata is too large.")
             try:

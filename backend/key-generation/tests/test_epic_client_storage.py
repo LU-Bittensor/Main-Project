@@ -1,4 +1,6 @@
 """Authenticated handoff and ciphertext publication, with synthetic S3 and Epic."""
+import pytest
+import shutil
 import base64
 import io
 import json
@@ -12,17 +14,23 @@ from test_hippius_storage import setup, OWNER, OTHER
 from test_epic_import import seed, remote
 
 
-def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatch, tmp_path):
+@pytest.mark.parametrize("storage_backend", ["hippius", "local"])
+def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatch, tmp_path, storage_backend):
     make, catalog, s3 = setup
-    monkeypatch.setenv('DOCUMENT_STORAGE_BACKEND', 'hippius')
+    monkeypatch.setenv('DOCUMENT_STORAGE_BACKEND', storage_backend)
     monkeypatch.setenv('SUPABASE_URL', 'https://project.example')
     monkeypatch.setenv('SUPABASE_PUBLISHABLE_KEY', 'public-test')
     monkeypatch.setenv('SUPABASE_SECRET_KEY', 'test-service')
+    if storage_backend == 'local':
+        monkeypatch.delenv('SUPABASE_SECRET_KEY')
+        monkeypatch.delenv('SUPABASE_SERVICE_ROLE_KEY', raising=False)
     store = make()
     monkeypatch.setattr(hippius_storage, 'HippiusDocumentStore', lambda *a: store)
     def auth(url, **kw):
         uid = {'Bearer owner': OWNER, 'Bearer other': OTHER,
                'Bearer outsider': '94816262-e3d1-465b-9945-fb9457fe1fb9'}.get(kw['headers']['Authorization'])
+        if uid is None:
+            return SimpleNamespace(status_code=401)
         value = {'id': uid} if url.endswith('/auth/v1/user') else [{'role': 'patient'}]
         return SimpleNamespace(status_code=200, raise_for_status=lambda: None, json=lambda: value)
     monkeypatch.setattr(grant_api.requests, 'get', auth)
@@ -54,7 +62,10 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     uploaded = client.post('/api/records', headers=owner, data={'file': (io.BytesIO(ciphertext), 'Epic-snapshot.txt'),
         'kind': 'Epic import', 'client_info': json.dumps(info)})
     assert uploaded.status_code == 201
-    assert list(s3.objects.values()) == [ciphertext]
+    if storage_backend == 'hippius':
+        assert list(s3.objects.values()) == [ciphertext]
+    else:
+        assert client.get('/api/health').json['document_storage_backend'] == 'local'
     assert client.get(url+'/payload', headers=owner).json == {'stored': True}
     assert client.post(url+'/complete', headers=other, json={}).status_code == 404
     done = client.post(url+'/complete', headers=owner, json={})
@@ -84,6 +95,8 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
         'recipient_id': OTHER, 'envelope': peer})
     assert envelope.status_code == 200, envelope.json
     assert client.post(doc_url+'/document', headers=other).status_code == 403
+    assert client.post(doc_url+'/document').status_code == 401
+    assert client.get(doc_url+'/encryption', headers={'Authorization': 'Bearer expired'}).status_code == 401
     grant = client.post('/api/grants', headers=owner, json={
         'recipient_id': OTHER, 'record_ids': [m['record_id']]})
     assert grant.status_code == 200, grant.json
@@ -109,6 +122,9 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     # Simulate registry reads here; no RPC or real wallet transaction is claimed.
     from test_wallet_document_sharing import WalletChain
     chain = WalletChain()
+    if storage_backend == 'local':
+        (tmp_path/'wallet-chain').mkdir()
+        shutil.copyfile(tmp_path/'local-documents.sqlite3', tmp_path/'wallet-chain/local-documents.sqlite3')
     wallet_app = grant_api.create_app(data_dir=tmp_path/'wallet-chain', master_key=b'g'*32, chain=chain)
     wallet_client = wallet_app.test_client()
     assert wallet_client.post('/api/enroll', headers=owner, json={
