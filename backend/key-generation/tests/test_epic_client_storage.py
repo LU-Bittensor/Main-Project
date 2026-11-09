@@ -21,7 +21,8 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     store = make()
     monkeypatch.setattr(hippius_storage, 'HippiusDocumentStore', lambda *a: store)
     def auth(url, **kw):
-        uid = OWNER if kw['headers']['Authorization'] == 'Bearer owner' else OTHER
+        uid = {'Bearer owner': OWNER, 'Bearer other': OTHER,
+               'Bearer outsider': '94816262-e3d1-465b-9945-fb9457fe1fb9'}.get(kw['headers']['Authorization'])
         value = {'id': uid} if url.endswith('/auth/v1/user') else [{'role': 'patient'}]
         return SimpleNamespace(status_code=200, raise_for_status=lambda: None, json=lambda: value)
     monkeypatch.setattr(grant_api.requests, 'get', auth)
@@ -32,7 +33,7 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     imports = app.extensions['epic_imports']
     seed(imports.oauth, OWNER)
     imports.transport, imports.launch = remote(), lambda task: task()
-    fixture = json.loads((Path(__file__).parent / 'fixtures/client_document.json').read_text())
+    fixture = json.loads((Path(__file__).parent / 'fixtures/epic_shared_document.json').read_text())
     info = fixture['info']; m = info['manifest']
     monkeypatch.setattr(epic_import, 'uuid', SimpleNamespace(uuid4=lambda: m['record_id']))
     root = '/api/external-import/epic/import'
@@ -66,3 +67,74 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     with sqlite3.connect(imports.path) as db:
         assert db.execute('SELECT payload,digest FROM epic_import_jobs').fetchone() == (None, None)
     assert client.get('/api/records', headers=owner).json[0]['id'] == m['record_id']
+
+    # The signed recipient envelope was generated and decrypted by the frontend
+    # crypto test using public synthetic keys. An envelope alone never grants access.
+    peer = fixture['recipientEnvelope']
+    outsider = {'Authorization': 'Bearer outsider'}
+    assert client.post('/api/enroll', headers=other, json={
+        'evmAddress': '0x5050A4F4b3f9338C3472dcC01A87C76A144b3c9c',
+        'x25519PublicKeyB64': peer['recipient_public_key']}).status_code == 200
+    assert client.post('/api/enroll', headers=outsider).status_code == 200
+    doc_url = '/api/records/' + m['record_id']
+    for suffix, method in [('/encryption', 'GET'), ('/document', 'POST')]:
+        assert client.open(doc_url+suffix, method=method, headers=other).status_code == 403
+    assert client.post(doc_url+'/encryption', headers=other, json={}).status_code == 403
+    envelope = client.post(doc_url+'/encryption', headers=owner, json={
+        'recipient_id': OTHER, 'envelope': peer})
+    assert envelope.status_code == 200, envelope.json
+    assert client.post(doc_url+'/document', headers=other).status_code == 403
+    grant = client.post('/api/grants', headers=owner, json={
+        'recipient_id': OTHER, 'record_ids': [m['record_id']]})
+    assert grant.status_code == 200, grant.json
+    grant_id = grant.json['grants'][0]['id']
+    assert client.get('/api/grants', headers=other).json[0]['document']['client_encrypted']
+    assert client.get('/api/records', headers=other).json == []
+    received_info = client.get(doc_url+'/encryption', headers=other)
+    assert received_info.status_code == 200
+    assert received_info.json['envelope'] == peer
+    assert client.post(doc_url+'/document', headers=other).data == ciphertext
+    assert client.post(doc_url+'/document', headers=outsider).status_code == 403
+    assert client.get(doc_url+'/encryption', headers=outsider).status_code == 403
+    # Restart keeps the grant and ciphertext, and revoke blocks both key and file delivery.
+    restarted = grant_api.create_app(data_dir=tmp_path, master_key=b'g'*32).test_client()
+    assert restarted.post(doc_url+'/document', headers=other).data == ciphertext
+    assert restarted.delete('/api/grants/'+grant_id, headers=other).status_code == 403
+    assert restarted.delete('/api/grants/'+grant_id, headers=owner).status_code == 200
+    assert restarted.post(doc_url+'/document', headers=other).status_code == 403
+    assert restarted.get(doc_url+'/encryption', headers=other).status_code == 403
+    assert restarted.post(doc_url+'/document', headers=owner).data == ciphertext
+
+    # New encrypted imports use wallet-signed registry grants when configured.
+    # Simulate registry reads here; no RPC or real wallet transaction is claimed.
+    from test_wallet_document_sharing import WalletChain
+    chain = WalletChain()
+    wallet_app = grant_api.create_app(data_dir=tmp_path/'wallet-chain', master_key=b'g'*32, chain=chain)
+    wallet_client = wallet_app.test_client()
+    assert wallet_client.post('/api/enroll', headers=owner, json={
+        'evmAddress': m['owner_wallet'], 'x25519PublicKeyB64': m['owner_public_key']}).status_code == 200
+    assert wallet_client.post('/api/enroll', headers=other, json={
+        'evmAddress': '0x5050A4F4b3f9338C3472dcC01A87C76A144b3c9c',
+        'x25519PublicKeyB64': peer['recipient_public_key']}).status_code == 200
+    assert wallet_client.post('/api/enroll', headers=outsider).status_code == 200
+    assert wallet_client.post('/api/registry/resolve', headers=owner).status_code == 200
+    chain.shares.append(dict(record_id=m['record_id'], resource_id='0x'+'01'*32,
+        owner_wallet=m['owner_wallet'],
+        recipient_wallet='0x5050A4F4b3f9338C3472dcC01A87C76A144b3c9c',
+        active=True, tx_hash='0x'+'02'*32))
+    for identity in (owner, other):
+        ledger = wallet_client.get('/api/grants', headers=identity)
+        assert ledger.status_code == 200
+        assert any(g['id'] == m['record_id']+':'+OTHER and g['status'] == 'active'
+                   for g in ledger.json)
+    assert wallet_client.get(doc_url+'/encryption', headers=other).json['envelope'] == peer
+    assert wallet_client.post(doc_url+'/document', headers=other).data == ciphertext
+    assert wallet_client.post(doc_url+'/document', headers=outsider).status_code == 403
+    chain.offline = True
+    assert wallet_client.post(doc_url+'/document', headers=other).status_code == 503
+    assert wallet_client.get(doc_url+'/encryption', headers=other).status_code == 503
+    chain.offline = False
+    chain.shares[0]['active'] = False
+    assert wallet_client.post(doc_url+'/document', headers=other).status_code == 403
+    assert wallet_client.get(doc_url+'/encryption', headers=other).status_code == 403
+    assert wallet_client.post(doc_url+'/document', headers=owner).data == ciphertext
