@@ -60,8 +60,9 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     ciphertext = base64.b64decode(fixture['ciphertext'])
     # The API cannot inspect encrypted contents: synthetic browser fixture exercises publication.
     uploaded = client.post('/api/records', headers=owner, data={'file': (io.BytesIO(ciphertext), 'Epic-snapshot.txt'),
-        'kind': 'Epic import', 'client_info': json.dumps(info)})
+        'kind': 'Epic import', 'tags': 'Lab results, Imaging', 'client_info': json.dumps(info)})
     assert uploaded.status_code == 201
+    assert uploaded.json['tags'] == ['Lab results', 'Imaging']
     if storage_backend == 'hippius':
         assert list(s3.objects.values()) == [ciphertext]
     else:
@@ -102,6 +103,7 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     assert grant.status_code == 200, grant.json
     grant_id = grant.json['grants'][0]['id']
     assert client.get('/api/grants', headers=other).json[0]['document']['client_encrypted']
+    assert client.get('/api/grants', headers=other).json[0]['document']['tags'] == ['Lab results', 'Imaging']
     assert client.get('/api/records', headers=other).json == []
     received_info = client.get(doc_url+'/encryption', headers=other)
     assert received_info.status_code == 200
@@ -112,6 +114,7 @@ def test_epic_handoff_requires_owned_durable_client_ciphertext(setup, monkeypatc
     # Restart keeps the grant and ciphertext, and revoke blocks both key and file delivery.
     restarted = grant_api.create_app(data_dir=tmp_path, master_key=b'g'*32).test_client()
     assert restarted.post(doc_url+'/document', headers=other).data == ciphertext
+    assert restarted.get('/api/grants', headers=other).json[0]['document']['tags'] == ['Lab results', 'Imaging']
     assert restarted.delete('/api/grants/'+grant_id, headers=other).status_code == 403
     assert restarted.delete('/api/grants/'+grant_id, headers=owner).status_code == 200
     assert restarted.post(doc_url+'/document', headers=other).status_code == 403
