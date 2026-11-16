@@ -178,6 +178,10 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
 
     with app.app_context():
         db().executescript("""
+            CREATE TABLE IF NOT EXISTS document_permissions (
+                record_id TEXT NOT NULL, recipient_id TEXT NOT NULL,
+                level TEXT NOT NULL CHECK(level IN ('preview','download')),
+                PRIMARY KEY(record_id, recipient_id));
             CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, private_key BLOB NOT NULL,
@@ -368,6 +372,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
         item["recipient_wallet"] = db().execute("SELECT wallet FROM users WHERE id=?", (row["recipient_id"],)).fetchone()[0]
         item["registry_revoked"] = bool(row["registry_revoked"])
         item["record_ids"] = json.loads(row["records"])
+        item["permission"] = permission_level(item["record_ids"][0], row["recipient_id"]) if len(item["record_ids"]) == 1 else "preview"
         item["chain_enabled"] = chain is not None
         item["document"] = documents.get(item["record_ids"][0]) if len(item["record_ids"]) == 1 else None
         for field in ("owner", "recipient"):
@@ -399,7 +404,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             result.append(dict(
                 id=record_id + ':' + peer['id'], owner_id=owner['id'], owner_name=owner['name'],
                 recipient_id=peer['id'], recipient_name=peer['name'], recipient_wallet=peer['wallet'],
-                record_ids=[record_id], document=document, record_name=document['name'], scope=document['kind'],
+                permission=permission_level(record_id, peer['id']), record_ids=[record_id], document=document, record_name=document['name'], scope=document['kind'],
                 contract_address=address, resource_id=share['resource_id'], chain_enabled=True,
                 status='active' if share['active'] else 'revoked', registry_revoked=not share['active'],
                 tx_hash=share['tx_hash'], register_tx=share['tx_hash'],
@@ -945,6 +950,34 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                 identifier=client_info['manifest']['record_id'], client_info=client_info)), 201
         return jsonify(documents.add(g.uid, name, tags, mime, content, kind=kind)), 201
 
+    def permission_level(record_id, recipient):
+        row = db().execute("SELECT level FROM document_permissions WHERE record_id=? AND recipient_id=?",
+                           (record_id, recipient)).fetchone()
+        return row['level'] if row else 'preview'
+
+    @app.route("/api/records/<record_id>/permission", methods=['GET', 'PUT'])
+    def document_permission(record_id):
+        with lock:
+            document = documents.get(record_id)
+            if document is None:
+                raise APIError("Record not found", 404)
+            if request.method == 'PUT':
+                if document['owner_id'] != g.uid:
+                    raise APIError("Only the owner can change sharing permissions", 403)
+                body = request.get_json(silent=True) or {}
+                level, recipient = body.get('level'), body.get('recipient_id')
+                if level not in ('preview', 'download') or not isinstance(recipient, str) or not recipient:
+                    raise APIError("Choose a recipient and preview or download permission")
+                db().execute("INSERT INTO document_permissions VALUES (?,?,?) ON CONFLICT(record_id,recipient_id) DO UPDATE SET level=excluded.level",
+                             (record_id, recipient, level))
+                db().commit()
+                return jsonify(level=level)
+            if document['owner_id'] == g.uid:
+                return jsonify(level='download')
+            if not recipient_can_view_record(record_id, g.uid):
+                raise APIError("Document not found or access denied", 403)
+            return jsonify(level=permission_level(record_id, g.uid))
+
     @app.get("/api/records/<record_id>")
     def record_metadata(record_id):
         """Metadata for owner or an authorized recipient (API grant or on-chain hasGrant)."""
@@ -991,6 +1024,7 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             documents.save_envelope(record_id, owner, peer['id'], body['envelope'])
             return jsonify(saved=True)
 
+    @app.post("/api/records/<record_id>/download")
     @app.post("/api/records/<record_id>/document")
     def view_document(record_id):
         # Every delivery is authenticated. Never hand out a public or reusable storage URL.
@@ -1014,6 +1048,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
                     allowed = True
                 if not allowed:
                     raise APIError("Document not found or access denied", 403)
+            if request.path.endswith('/download') and document['owner_id'] != g.uid and permission_level(record_id, g.uid) != 'download':
+                raise APIError("This record is shared for preview only", 403)
             response = Response(documents.read(record_id, document["owner_id"]), mimetype="application/octet-stream" if document.get("client_encrypted") else document["mime_type"])
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"

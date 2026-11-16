@@ -74,3 +74,18 @@ def test_encryption_metadata_uses_live_grant_and_owner_checks(shared):
     assert client.get(url, headers=headers('clinician')).status_code == 403
     chain.offline = True
     assert client.get(url, headers=headers('clinician')).status_code == 503
+
+
+def test_wallet_download_level_requires_live_access(shared):
+    client, chain, doc, _ = shared
+    base = '/api/records/' + doc['id']
+    peer = headers('clinician')
+    assert client.post(base + '/download', headers=peer).status_code == 403
+    assert client.put(base + '/permission', headers=headers(),
+                      json={'recipient_id': 'clinician', 'level': 'download'}).status_code == 200
+    assert client.get('/api/grants', headers=peer).json[0]['permission'] == 'download'
+    assert client.post(base + '/download', headers=peer).data == b'private'
+    chain.shares[0]['active'] = False
+    assert client.post(base + '/download', headers=peer).status_code == 403
+    chain.offline = True
+    assert client.post(base + '/download', headers=peer).status_code == 503
