@@ -1,0 +1,174 @@
+{
+  "proposalVersion": "v1.0.0",
+  "reviewedOn": "2026-11-10",
+  "status": "research-proposal-not-runtime",
+  "standardComplianceClaim": false,
+  "namespace": "MediLink local navigation categories",
+  "recommendedV1Persistence": "canonical display strings through existing tags API; IDs are catalog identifiers only",
+  "categories": [
+    {
+      "id": "lab-results",
+      "display": "Lab results",
+      "aliases": [
+        "labs",
+        "laboratory",
+        "bloodwork",
+        "test results"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "imaging",
+      "display": "Imaging",
+      "aliases": [
+        "radiology",
+        "X-ray",
+        "MRI",
+        "CT"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "visit-notes",
+      "display": "Visit notes",
+      "aliases": [
+        "clinical notes",
+        "consultation",
+        "progress notes"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "medications",
+      "display": "Medications",
+      "aliases": [
+        "medicines",
+        "prescriptions",
+        "medication list"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "immunizations",
+      "display": "Immunizations",
+      "aliases": [
+        "vaccines",
+        "vaccinations"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "allergies",
+      "display": "Allergies",
+      "aliases": [
+        "allergy list",
+        "intolerances"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "conditions-history",
+      "display": "Conditions and history",
+      "aliases": [
+        "conditions",
+        "problems",
+        "medical history"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "procedures",
+      "display": "Procedures",
+      "aliases": [
+        "surgery",
+        "operative report"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "care-plans",
+      "display": "Care plans",
+      "aliases": [
+        "plan of care",
+        "treatment plan"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "health-summaries",
+      "display": "Health summaries",
+      "aliases": [
+        "discharge summary",
+        "care summary"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "vitals-measurements",
+      "display": "Vitals and measurements",
+      "aliases": [
+        "vital signs",
+        "blood pressure",
+        "pulse"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "forms-consents",
+      "display": "Forms and consents",
+      "aliases": [
+        "consent",
+        "authorization form"
+      ],
+      "standardCoding": null
+    },
+    {
+      "id": "other",
+      "display": "Other",
+      "aliases": [],
+      "standardCoding": null
+    }
+  ],
+  "verifiedDocumentTypeExamples": [
+    {
+      "system": "http://loinc.org",
+      "code": "11502-2",
+      "display": "Laboratory report",
+      "url": "https://loinc.org/11502-2/",
+      "automaticMapping": false
+    },
+    {
+      "system": "http://loinc.org",
+      "code": "18748-4",
+      "display": "Diagnostic imaging study",
+      "url": "https://loinc.org/18748-4/",
+      "automaticMapping": false
+    },
+    {
+      "system": "http://loinc.org",
+      "code": "18842-5",
+      "display": "Discharge Summary",
+      "url": "https://loinc.org/18842-5/",
+      "automaticMapping": false
+    },
+    {
+      "system": "http://loinc.org",
+      "code": "34133-9",
+      "display": "Summary of Episode Note",
+      "url": "https://loinc.org/34133-9/",
+      "automaticMapping": false
+    }
+  ],
+  "limitsFromCurrentAPI": {
+    "maximumTags": 20,
+    "maximumCharactersPerTag": 50,
+    "maximumRawFieldCharacters": 1000
+  },
+  "notes": [
+    "Local categories are not standard FHIR codes.",
+    "Do not alter kind or source when saving categories.",
+    "Do not use category tags to authorize access.",
+    "Preserve unknown legacy tags.",
+    "Tag metadata is not end-to-end encrypted by the existing document format."
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-08",
+  "authentication": "two real Supabase test accounts",
+  "patient_browser": "Safari",
+  "provider_browser": "Codex in-app browser",
+  "document": "MediLink-SYNTHETIC-sharing-test.txt",
+  "record_id": "16cdf8ad-0ad4-4d91-adb7-01d96614da38",
+  "grant_id": "a3e75bcb-7a56-4fa2-aad7-8ea0ac3a801b",
+  "storage": "local browser ciphertext",
+  "blockchain": false,
+  "live_epic_import": false,
+  "checks": {
+    "patient_upload_and_preview": true,
+    "provider_initial_incoming_grants": 0,
+    "ciphertext_integrity_matches": true,
+    "plaintext_marker_absent_from_ciphertext": true,
+    "fingerprints_compared_in_both_directions": true,
+    "provider_opened_and_decrypted_exact_marker": true,
+    "owner_revoked": true,
+    "provider_stale_receipt_reopen_denied": true,
+    "provider_access_check_denied": true,
+    "provider_receipt_status": "revoked",
+    "owner_can_open_after_revoke": true
+  },
+  "limits": [
+    "Epic sandbox authorization returned 500; public discovery/metadata returned 503.",
+    "A synthetic uploaded document was used; this was not an Epic import.",
+    "No live chain transactions or Hippius storage requests were performed.",
+    "Third-account and restart scenarios remain covered by automated tests rather than this browser run."
+  ]
+}
