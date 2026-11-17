@@ -1,0 +1,10 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/medilink/api:hardhat', '.']
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'cloud/Hardhat.Dockerfile', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/medilink/hardhat:demo', '.']
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/medilink/api:hardhat'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/medilink/hardhat:demo'
+substitutions:
+  _REGION: us-central1

@@ -322,6 +322,8 @@ def create_app(*, dev=False, data_dir=None, master_key=None, chain=None):
             raise APIError("Local demo only accepts loopback requests", 403)
         if request.method == "OPTIONS":
             return "", 204
+        if request.path == '/rpc' and app.config.get('HARDHAT_RPC_ENABLED'):
+            return None
         if request.path == "/api/health":
             return None
         if request.path == "/api/faucet/status":

@@ -1,5 +1,7 @@
 # MediLink API on Cloud Run
 
+For a disposable Hardhat node alongside the API, use [cloud/HARDHAT.md](cloud/HARDHAT.md). It includes the two-image build, dashboard startup ordering, and exact Netlify variables.
+
 The frontend stays on Netlify. Build from **Main-Project**, not backend/ or the outer Hippius SDK repository. The root Dockerfile and backend/Dockerfile both require this same context. The image includes Flask, Gunicorn, Epic's shared Python modules and the compiled AccessRegistry artifact. It excludes local databases, .env files and frontend assets, and runs as a non-root user. Do not run start_backend.sh inside the container: that starts a local test blockchain.
 
 ## Runtime configuration
