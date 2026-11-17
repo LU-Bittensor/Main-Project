@@ -1,4 +1,13 @@
 # Build context: Main-Project (includes the Epic modules outside backend/).
+# Compile from tracked sources; generated artifacts are not checked into Git.
+FROM node:22-bookworm-slim AS contracts
+WORKDIR /chain
+COPY backend/key-generation/testContractDeployment/package*.json ./
+RUN npm ci
+COPY backend/key-generation/testContractDeployment/hardhat.config.* ./
+COPY backend/contracts/ ./contracts/
+RUN npx hardhat compile
+
 FROM python:3.11-slim AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
@@ -14,7 +23,7 @@ RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels \
     && useradd --create-home --uid 10001 medilink
 WORKDIR /app/backend/key-generation
 COPY backend/key-generation/*.py ./
-COPY backend/key-generation/testContractDeployment/artifacts/contracts/AccessRegistry.sol/AccessRegistry.json ./testContractDeployment/artifacts/contracts/AccessRegistry.sol/AccessRegistry.json
+COPY --from=contracts /chain/artifacts/contracts/ ./testContractDeployment/artifacts/contracts/
 COPY subnet-template/epic_*.py /app/subnet-template/
 COPY subnet-template/ehr_storage.py /app/subnet-template/
 USER medilink
