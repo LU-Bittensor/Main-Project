@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 import requests
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Public Hardhat account #0; only used for the explicitly enabled disposable chain.
 TEST_OPERATOR = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
@@ -50,6 +51,10 @@ def create_cloud_app():
         chain = ChainGrants(os.environ["RPC_URL"], os.environ["OWNER_PRIVATE_KEY"],
                             fund_local_wallets=False)
     app = create_app(dev=False, chain=chain)
+    # Cloud Run terminates TLS before forwarding to Gunicorn. Trust only the
+    # proxy's scheme so absolute vault URLs retain HTTPS (not host/IP headers).
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1, x_host=0,
+                             x_port=0, x_prefix=0)
     if sidecar:
         from test_rpc import install_rpc
         app.config['HARDHAT_RPC_ENABLED'] = True
